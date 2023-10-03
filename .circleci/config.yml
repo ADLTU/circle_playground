@@ -9,18 +9,11 @@ jobs:
       - image: cimg/python:3.10.2
     steps:
       - checkout
-      - run:
-          name: Install Poetry
-          command: |
-            curl -sSL https://install.python-poetry.org | python3 -
-      - run:
-          name: Install project dependencies with Poetry
-          command: |
-            python3 -m poetry install --no-root
+      - python/install-packages:
+          pkg-manager: poetry
       - run:
           name: Run tests
           command: pytest
-
 
 workflows:
   sample:
