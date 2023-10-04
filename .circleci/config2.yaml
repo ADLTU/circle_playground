@@ -1,0 +1,209 @@
+#version: 2.1
+#
+#orbs:
+#  python: circleci/python@1.5.0
+#
+#jobs:
+#  build-and-test:
+#    docker:
+#      - image: google/cloud-sdk:<< parameters.gcp_sdk_version >>
+#    parameters:
+#      gcp_sdk_version:
+#        default: 437.0.0
+#        description: The version to use for the GCP SDK.
+#        type: string
+#      google_region:
+#        default: GCP_REGION
+#        description: The name of the environment variable containing the region in GCP.
+#        type: string
+#    steps:
+#      - checkout
+#      - run:
+#          command: gcloud auth configure-docker "${!ORB_GOOGLE_REGION}-docker.pkg.dev"
+#          environment:
+#            ORB_GOOGLE_REGION: << parameters.google_region >>
+#          name: Authenticate Docker with Artifact Registry
+#
+#workflows:
+#  sample:
+#    jobs:
+#      - build-and-test
+#
+#
+#
+#
+#
+#
+#
+#
+#description: >
+#docker:
+#  - image: google/cloud-sdk:<< parameters.gcp_sdk_version >>
+#parameters:
+#  artifact_repository:
+#    description: The name of the repository in Artifact Registry.
+#    type: string
+#  attach_workspace:
+#    default: false
+#    description: Attach a CircleCI workspace.
+#    type: boolean
+#  build_timeout:
+#    default: 45m
+#    description: >-
+#      The timeout value to use if no output is detected from Cloudbuild after
+#      this time.
+#    type: string
+#  checkout_directory:
+#    default: /root/kraken
+#    description: The local directory to checkout the repository to.
+#    type: string
+#  cloudbuild_yaml_filename:
+#    description: >-
+#      The filename of the cloudbuild.yml inside the `path_to_cloudbuild_yaml`
+#      directory.
+#    type: string
+#  context_dir:
+#    description: >
+#      The directory to use as the root context when building the Dockerfile.
+#
+#
+#      In most cases this will be the same directory where the cloudbuild.yml is
+#      located.
+#
+#
+#      If your build requires files in parent directories relative to the
+#      Dockerfile, you can specify which directory should be used.
+#
+#
+#      Your cloudbuild.yml and Dockerfile must reference files/paths relative to
+#      this context dir.
+#    type: string
+#  gcp_cred_config_file_path:
+#    default: .circleci/gcp_cred_config.json
+#    description: The path where the credentials config path should be saved to.
+#    type: string
+#  gcp_sdk_version:
+#    default: 437.0.0
+#    description: The version to use for the GCP SDK.
+#    type: string
+#  google_project_id:
+#    default: GCP_PROJECT_ID
+#    description: >-
+#      The name of the environment variable containing the name of the project in
+#      GCP.
+#    type: string
+#  google_project_number:
+#    default: GCP_PROJECT_NUMBER
+#    description: The name of the environment variable containing the project number ID.
+#    type: string
+#  google_region:
+#    default: GCP_REGION
+#    description: The name of the environment variable containing the region in GCP.
+#    type: string
+#  image_name:
+#    description: The name of the image to build.
+#    type: string
+#  path_to_cloudbuild_yaml:
+#    description: >-
+#      The path to the directory inside the repository containing the
+#      cloudbuild.yml.
+#    type: string
+#  remove_untagged:
+#    default: true
+#    description: >
+#      If `true` will remove any untagged images after the new image has been
+#      built.
+#
+#
+#      This allows building an image to a `latest` tag and removing the old
+#      untagged image when a new image has been built.
+#    type: boolean
+#  service_account_email:
+#    default: GCP_SERVICE_ACCOUNT_EMAIL
+#    description: >-
+#      The name of the environment variable containing the service account to
+#      use.
+#    type: string
+#  substitutions:
+#    default: ''
+#    description: Any substitutions to use when building the image with Cloudbuild.
+#    type: string
+#  use_kaniko:
+#    default: true
+#    description: >-
+#      If `true` use the Kaniko builder in Cloudbuild. This provides cached
+#      layers for quicker repeatable builds.
+#    type: boolean
+#  workload_identity_pool_id:
+#    default: GCP_WIP_ID
+#    description: >-
+#      The name of the environment variable containing the Workload Identity Pool
+#      ID.
+#    type: string
+#  workload_identity_pool_provider_id:
+#    default: GCP_WIP_PROVIDER_ID
+#    description: >-
+#      The name of the environment variable containing the Workload Identity Pool
+#      Provider ID.
+#    type: string
+#  workspace_directory:
+#    default: ''
+#    description: The full directory path where to attach the workspace.
+#    type: string
+#resource_class: small
+#steps:
+#  - checkout:
+#      path: << parameters.checkout_directory >>
+#  - checkout_submodules
+#  - when:
+#      condition:
+#        equal:
+#          - true
+#          - << parameters.attach_workspace >>
+#      steps:
+#        - attach_workspace:
+#            at: << parameters.workspace_directory >>
+#  - gcp_auth_oidc:
+#      gcp_cred_config_file_path: << parameters.gcp_cred_config_file_path >>
+#      gcp_sdk_version: << parameters.gcp_sdk_version >>
+#      google_project_id: << parameters.google_project_id >>
+#      google_project_number: << parameters.google_project_number >>
+#      service_account_email: << parameters.service_account_email >>
+#      workload_identity_pool_id: << parameters.workload_identity_pool_id >>
+#      workload_identity_pool_provider_id: << parameters.workload_identity_pool_provider_id >>
+#  - build_docker_image_cloudbuild:
+#      artifact_repository: << parameters.artifact_repository >>
+#      build_timeout: << parameters.build_timeout >>
+#      cloudbuild_yaml_filename: << parameters.cloudbuild_yaml_filename >>
+#      context_dir: << parameters.context_dir >>
+#      image_name: << parameters.image_name >>
+#      path_to_cloudbuild_yaml: << parameters.path_to_cloudbuild_yaml >>
+#      remove_untagged: << parameters.remove_untagged >>
+#      root_directory: << parameters.checkout_directory >>
+#      substitutions: << parameters.substitutions >>
+#      use_kaniko: << parameters.use_kaniko >>
+#  - slack_notification_build_fail
+#working_directory: << parameters.checkout_directory >>
+
+
+version: 2.1
+
+orbs:
+  python: circleci/python@1.5.0
+
+jobs:
+  build-and-test2:
+    docker:
+      - image: cimg/python:3.11.5
+    steps:
+      - checkout
+      - python/install-packages:
+          pkg-manager: poetry
+      - run:
+          name: Run tests
+          command: poetry run pytest
+
+workflows:
+  sample:
+    jobs:
+      - build-and-test2
