@@ -30,9 +30,7 @@ jobs:
     steps:
       - run:
           name: Authenticate Docker with Artifact Registry
-          command: gcloud auth configure-docker "${!ORB_GOOGLE_REGION}-docker.pkg.dev"
-          environment:
-            ORB_GOOGLE_REGION: << parameters.google_region >>
+          command: gcloud auth configure-docker "${parameters.google_region}-docker.pkg.dev"
 
 workflows:
   sample:
