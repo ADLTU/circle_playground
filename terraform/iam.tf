@@ -35,7 +35,7 @@ resource "google_project_iam_member" "circleci-project-member" {
     "roles/iam.securityAdmin", # allows Terraform to create service accounts
     "roles/iam.serviceAccountUser", # needed for Workload Identity
     "roles/iam.workloadIdentityPoolAdmin", # allows Terraform to create/manage Workload Identity pools
-    "roles/serviceusage.serviceUsageConsumer" # Add this line for service usage permission
+    "roles/editor", # Grant the Editor role
   ])
 
   project = "kraken-v2-dev"
