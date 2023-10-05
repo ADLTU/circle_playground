@@ -118,15 +118,15 @@ jobs:
           name: Check Active Account
           command: gcloud auth list
 
-  rebuild-decoder-container:
-#    executor:
-#      name: gcp-cli/default
-    steps:
-      - checkout
-
-      - run:
-          name: Check Active Account
-          command: gcloud auth list
+#  rebuild-decoder-container:
+##    executor:
+##      name: gcp-cli/default
+#    steps:
+#      - checkout
+#
+#      - run:
+#          name: Check Active Account
+#          command: gcloud auth list
 
 workflows:
   build:
