@@ -44,7 +44,6 @@ jobs:
 #         command: gcloud builds submit --project=kraken-v2-dev --config /root/project/cloudbuild_valuator.yaml --substitutions="_PROJECT=kraken-v2-dev"
           command: | 
             pwd
-#            cd /root/project/
             ls -a
 
 workflows:
