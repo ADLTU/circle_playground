@@ -31,13 +31,13 @@ jobs:
       - run:
           name: Print Parameters
           command: |
-            echo "Authenticating Docker with Artifact Registry for ${parameters.google_region}-docker.pkg.dev"
-            echo "Google Region: ${parameters.google_region}, GCP SDK Version: ${parameters.gcp_sdk_version}"
+            echo "Authenticating Docker with Artifact Registry for $google_region-docker.pkg.dev"
+            echo "Google Region: $parameters.google_region, GCP SDK Version: $parameters.gcp_sdk_version"
       - run:
           name: Authenticate Docker with Artifact Registry
           command: |
-            echo "Authenticating Docker with Artifact Registry for ${parameters.google_region}-docker.pkg.dev"
-            gcloud auth configure-docker "${parameters.google_region}-docker.pkg.dev"
+            echo "Authenticating Docker with Artifact Registry for $google_region-docker.pkg.dev"
+            gcloud auth configure-docker "$parameters.google_region-docker.pkg.dev"
 
 
 workflows:
