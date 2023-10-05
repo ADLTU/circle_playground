@@ -164,7 +164,7 @@ jobs:
     steps:
       - checkout
       - authenticate  # Removed 'context: decoder'
-      - rebuild-decoder-container
+#      - rebuild-decoder-container
 
 workflows:
   version: 2
