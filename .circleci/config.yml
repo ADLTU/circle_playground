@@ -28,9 +28,6 @@ jobs:
         description: The version to use for the GCP SDK.
         type: string
     steps:
-      - checkout
-      - python/install-packages:
-          pkg-manager: poetry
       - run:
           name: Authenticate Docker with Artifact Registry
           command: gcloud auth configure-docker "${!ORB_GOOGLE_REGION}-docker.pkg.dev"
