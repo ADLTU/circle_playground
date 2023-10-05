@@ -37,7 +37,8 @@ jobs:
 
       - run:
           name: Authenticate Docker with Artifact Registry
-          command: gcloud auth configure-docker << parameters.google_region >>-docker.pkg.dev
+          command: gcloud auth login
+#          command: gcloud auth configure-docker << parameters.google_region >>-docker.pkg.dev
 
       - run:
           name: Submit new build
