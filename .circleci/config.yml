@@ -62,26 +62,10 @@ jobs:
 workflows:
   sample:
     jobs:
-      - build-and-test
+#      - build-and-test
       - deploy-terraform-main:
           context:
             - decoder
-      - rebuild-decoder-container:
-          requires:
-            - deploy-terraform-main
-
-
-#version: 2.1
-#
-#orbs:
-
-#
-#
-#jobs:
-
-#
-#
-#workflows:
-#  build:
-#    jobs:
-
+#      - rebuild-decoder-container:
+#          requires:
+#            - deploy-terraform-main
