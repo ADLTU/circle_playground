@@ -40,7 +40,12 @@ jobs:
 
       - run:
           name: Submit new build
-          command: gcloud builds submit --project=kraken-v2-dev --config ./cloudbuild_valuator.yaml --substitutions="_PROJECT=kraken-v2-dev"
+#          command: gcloud builds submit --project=kraken-v2-dev --config ./cloudbuild_valuator.yaml --substitutions="_PROJECT=kraken-v2-dev"
+          command: |
+            ls 
+            pwd
+            pwd
+            ls -a
 
 workflows:
   sample:
