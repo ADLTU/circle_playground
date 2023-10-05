@@ -86,66 +86,47 @@ orbs:
   gcp-cli: circleci/gcp-cli@3.1.0
   build-tools: circleci/build-tools@3.0.0
 
-docker:
-  - image: google/cloud-sdk:437.0.0
-
-rebuild-decoder-container:
-  steps:
-    - checkout
-    - run:
-        name: Check Active Account
-        command: gcloud auth list
+jobs:
+  rebuild-decoder-container:
+    executor: gcp-cli/default
+    steps:
+      - checkout
+      - run:
+          name: Check Active Account
+          command: gcloud auth list
 
   deploy-terraform-main:
-    executor:
-      name: gcp-cli/default
+    executor: gcp-cli/default
     steps:
       - checkout
       - gcp-cli/setup:
           use_oidc: true
-          google_project_id: GCP_PROJECT_ID
-          google_project_number: GCP_PROJECT_NUMBER
-          service_account_email: GCP_SERVICE_ACCOUNT_EMAIL
-          workload_identity_pool_id: GCP_WIP_ID
-          workload_identity_pool_provider_id: GCP_WIP_PROVIDER_ID
-
+          google_project_id: $GCP_PROJECT_ID
+          google_project_number: $GCP_PROJECT_NUMBER
+          service_account_email: $GCP_SERVICE_ACCOUNT_EMAIL
+          workload_identity_pool_id: $GCP_WIP_ID
+          workload_identity_pool_provider_id: $GCP_WIP_PROVIDER_ID
       - run:
           name: Check Active Account
           command: gcloud auth list
-#
-#jobs:
-#  build-and-test:
-#    docker:
-#      - image: cimg/python:3.11.5
-#    steps:
-#      - checkout
-#      - python/install-packages:
-#          pkg-manager: poetry
-#      - run:
-#          name: Run tests
-#          command: poetry run pytest
-#
-#
-#
 
-
-#
-##    executor:
-##      name: gcp-cli/default
-#    steps:
-#      - checkout
-#
-#      - run:
-#          name: Check Active Account
-#          command: gcloud auth list
+  build-and-test:
+    docker:
+      - image: cimg/python:3.11.5
+    steps:
+      - checkout
+      - python/install-packages:
+          pkg-manager: poetry
+      - run:
+          name: Run tests
+          command: poetry run pytest
 
 workflows:
   build:
     jobs:
-#      - build-and-test
+      - build-and-test
       - deploy-terraform-main:
-          context:
-            - decoder
+          context: decoder
       - rebuild-decoder-container:
           requires:
             - deploy-terraform-main
