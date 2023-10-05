@@ -9,9 +9,9 @@ parameters:
     description: The name of the environment variable containing the region in GCP.
     type: string
   gcp_sdk_version:
-      default: 437.0.0
-      description: The version to use for the GCP SDK.
-      type: string
+    default: 437.0.0
+    description: The version to use for the GCP SDK.
+    type: string
 
 jobs:
   build-and-test:
