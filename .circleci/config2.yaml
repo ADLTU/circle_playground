@@ -1,174 +1,1824 @@
-description: >
-  Build a Docker image using GCP Cloud Build and push to Artifact Registry.
+# This code is licensed from CircleCI to the user under the MIT license.
+# See here for details: https://circleci.com/developer/orbs/licensing
+version: 2.1
+description: |
+    This orb provides a consistent CI/CD deployment for Data Applications Team when working in GCP. Use the provided jobs/commands to simplify deployments using Terraform, GCloud CLI, Kubectl/Helm & building Docker images. Source code for this orb can be found at https://github.com/AgentSoftware/data-applications-team-ops-orb.
+display:
+    home_url: https://docs.data.api.street.co.uk/
+    source_url: https://github.com/AgentSoftware/data-applications-team-ops-orb
+orbs:
+    build-tools: circleci/build-tools@3.0.0
+    gcp-cli: circleci/gcp-cli@3.1.0
+    helm: circleci/helm@2.0.1
+    jq: circleci/jq@2.2.0
+    slack: circleci/slack@4.12.5
+    terraform: circleci/terraform@3.2.1
+commands:
+    authenticate_with_gke:
+        description: Authenticate with a GKE cluster.
+        parameters:
+            gke_cluster_name:
+                description: The name of the cluster in GKE.
+                type: string
+            google_project_id:
+                default: GCP_PROJECT_ID
+                description: The name of the environment variable containing the name of the project in GCP.
+                type: string
+            google_region:
+                default: GCP_REGION
+                description: The name of the environment variable containing the region in GCP.
+                type: string
+        steps:
+            - run:
+                command: |
+                    gcloud container clusters get-credentials \
+                      --region "${!ORB_GOOGLE_REGION}" \
+                      --project "${!ORB_GOOGLE_PROJECT_ID}" \
+                      "${ORB_GOOGLE_CLUSTER_NAME}" > tmp.txt
+                    cat tmp.txt
+                environment:
+                    ORB_GOOGLE_CLUSTER_NAME: << parameters.gke_cluster_name >>
+                    ORB_GOOGLE_PROJECT_ID: << parameters.google_project_id >>
+                    ORB_GOOGLE_REGION: << parameters.google_region >>
+                name: Authenticate to GKE using gcloud
+    build_docker_image_cloudbuild:
+        description: |
+            Build a Docker image using GCP Cloud Build and push to Artifact Registry.
+
+            This command assumes you have created the following environment variables in a CircleCI context:
+
+            For building an image in GCP (these names are configurable in the parameters below):
+
+            - GCP_PROJECT_ID - the name of the project.
+            - GCP_REGION - the region in GCP.
+        parameters:
+            artifact_repository:
+                description: The name of the repository in Artifact Registry.
+                type: string
+            build_timeout:
+                default: 45m
+                description: The timeout value to use if no output is detected from Cloudbuild after this time.
+                type: string
+            cloudbuild_yaml_filename:
+                description: The filename of the cloudbuild.yml inside the `path_to_cloudbuild_yaml` directory.
+                type: string
+            context_dir:
+                description: The directory to use as the root context when building the Dockerfile.
+                type: string
+            google_project_id:
+                default: GCP_PROJECT_ID
+                description: The name of the environment variable containing the name of the project in GCP.
+                type: string
+            google_region:
+                default: GCP_REGION
+                description: The name of the environment variable containing the region in GCP.
+                type: string
+            image_name:
+                description: The name of the image to build.
+                type: string
+            path_to_cloudbuild_yaml:
+                description: The path to the directory inside the repository containing the cloudbuild.yml.
+                type: string
+            remove_untagged:
+                default: true
+                description: |
+                    If `true` will remove any untagged images after the new image has been built.
+
+                    This allows building an image to a `latest` tag and removing the old untagged image when a new image has been built.
+                type: boolean
+            root_directory:
+                default: /root/kraken
+                description: Root directory.
+                type: string
+            substitutions:
+                default: ""
+                description: Any substitutions to use when building the image with Cloudbuild.
+                type: string
+            use_kaniko:
+                default: true
+                description: If `true` use the Kaniko builder in Cloudbuild. This provides cached layers for quicker repeatable builds.
+                type: boolean
+        steps:
+            - run:
+                command: gcloud auth configure-docker "${!ORB_GOOGLE_REGION}-docker.pkg.dev"
+                environment:
+                    ORB_GOOGLE_REGION: << parameters.google_region >>
+                name: Authenticate Docker with Artifact Registry
+            - when:
+                condition:
+                    equal:
+                        - true
+                        - << parameters.use_kaniko >>
+                steps:
+                    - run:
+                        command: gcloud config set builds/use_kaniko True
+                        name: Use Kaniko Build
+            - run:
+                command: |
+                    #!/bin/bash
+
+                    if [ -n "${!ORB_GOOGLE_PROJECT_ID}" ]; then
+                        set -- "$@" --project="${!ORB_GOOGLE_PROJECT_ID}"
+                    fi
+
+                    if [ -n "${!ORB_GOOGLE_REGION}" ]; then
+                        set -- "$@" --region="${!ORB_GOOGLE_REGION}"
+                    fi
+
+                    if [ -n "${PATH_TO_CLOUDBUILD_YAML}" ] && [ -n "${CLOUDBUILD_YAML_FILENAME}" ]; then
+                        set -- "$@" --config="${PATH_TO_CLOUDBUILD_YAML}/${CLOUDBUILD_YAML_FILENAME}"
+                    fi
+
+                    if [ -n "${SUBSTITUTIONS}" ]; then
+                        set -- "$@" --substitutions="${SUBSTITUTIONS}"
+                    fi
+
+                    gcloud builds submit "$@" "${CONTEXT_DIR}"
+                environment:
+                    CLOUDBUILD_YAML_FILENAME: << parameters.cloudbuild_yaml_filename >>
+                    CONTEXT_DIR: << parameters.context_dir >>
+                    ORB_GOOGLE_PROJECT_ID: << parameters.google_project_id >>
+                    ORB_GOOGLE_REGION: << parameters.google_region >>
+                    PATH_TO_CLOUDBUILD_YAML: << parameters.path_to_cloudbuild_yaml >>
+                    SUBSTITUTIONS: << parameters.substitutions >>
+                name: Build Dockerfile using Cloud Build
+                no_output_timeout: << parameters.build_timeout >>
+            - when:
+                condition:
+                    equal:
+                        - true
+                        - << parameters.remove_untagged >>
+                steps:
+                    - run:
+                        command: |
+                            #!/bin/bash
+
+                            cat \<< EOF > "$ROOT_DIRECTORY/cleanup_docker_images.py"
+                            """
+                            Script which gets all tags for an image in Artifact Registry and removes all untagged.
+
+                            Takes arguments --artifact_registry_repository, --artifact_registry_package
+
+                            Example:
+                            \`\`\`
+                            python artifact_registry_delete.py \
+                                --artifact_registry_repository europe-west2-docker.pkg.dev/kraken-dev-298113/great-expectations \
+                                --artifact_registry_package europe-west2-docker.pkg.dev/kraken-dev-298113/great-expectations/great-expectations-run-checkpoint
+                            \`\`\`
+                            """
+
+                            import argparse
+                            import json
+                            import subprocess
 
 
-  This job assumes you have created the following environment variables in a
-  CircleCI context:
+                            def main(argv=None):
+                                parser = argparse.ArgumentParser()
+                                parser.add_argument("--artifact_registry_repository", dest="artifact_registry_repository", required=True, type=str)
+                                parser.add_argument("--artifact_registry_package", dest="artifact_registry_package", required=True, type=str)
+                                known_args, _ = parser.parse_known_args(argv)
+
+                                # list all images
+                                gcloud_output = subprocess.run(
+                                    [
+                                        "gcloud",
+                                        "artifacts",
+                                        "docker",
+                                        "images",
+                                        "list",
+                                        "--include-tags",
+                                        known_args.artifact_registry_repository,
+                                        "--format",
+                                        "json",
+                                    ],
+                                    shell=False,
+                                    text=True,
+                                    check=True,
+                                    capture_output=True,
+                                )
+
+                                # filter for registry packages that are untagged
+                                images_to_delete = [
+                                    {"package": item["package"], "tags": item["tags"], "version": item["version"]}
+                                    for item in json.loads(gcloud_output.stdout)
+                                    if item["package"] == known_args.artifact_registry_package
+                                    if item["tags"] == ""
+                                ]
+
+                                # if no untagged images exit
+                                if not images_to_delete:
+                                    print(f"no images to delete for package {known_args.artifact_registry_package}")
+                                    raise SystemExit(0)
+
+                                # if untagged images remove them
+                                print(f"found {len(images_to_delete)} untagged images for package {known_args.artifact_registry_package}")
+                                for image in images_to_delete:
+                                    gcloud_image = f"{image['package']}@{image['version']}"
+                                    gcloud_output = subprocess.run(
+                                        ["gcloud", "artifacts", "docker", "images", "delete", gcloud_image, "--quiet"],
+                                        shell=False,
+                                        text=True,
+                                        check=True,
+                                        capture_output=True,
+                                    )
+                                    print(f"removed {gcloud_image}")
 
 
-  For authenticating to GCP (these names are configurable in the parameters
-  below):
+                            if __name__ == "__main__":
+                                main()
+                            EOF
+
+                            python3 "$ROOT_DIRECTORY/cleanup_docker_images.py" \
+                                --artifact_registry_repository "${!ORB_GOOGLE_REGION}-docker.pkg.dev/${!ORB_GOOGLE_PROJECT_ID}/${ARTIFACT_REPOSITORY}" \
+                                --artifact_registry_package "${!ORB_GOOGLE_REGION}-docker.pkg.dev/${!ORB_GOOGLE_PROJECT_ID}/${ARTIFACT_REPOSITORY}/${IMAGE_NAME}"
+                        environment:
+                            ARTIFACT_REPOSITORY: << parameters.artifact_repository >>
+                            IMAGE_NAME: << parameters.image_name >>
+                            ORB_GOOGLE_PROJECT_ID: << parameters.google_project_id >>
+                            ORB_GOOGLE_REGION: << parameters.google_region >>
+                            ROOT_DIRECTORY: << parameters.root_directory >>
+                        name: Remove Previous Image(s) from Artifact Registry
+    build_python_package_sg_barcoder:
+        description: |
+            Build sg-property-barcoder-v2 Python package.
+
+            The built tarball is persisted to a workspace with directory `python_packages` with the name using the parameter `package_name`.
+        parameters:
+            package_name:
+                default: sg-property-barcoder-v2-2.0.tar.gz
+                description: The name of the built tarball package.
+                type: string
+            root_directory:
+                default: /root/kraken
+                description: Root directory.
+                type: string
+        steps:
+            - run:
+                command: |
+                    cd "${ROOT_DIRECTORY}/artefacts/python_packages/sg-property-barcoder-v2"
+                    python setup.py build sdist
+                environment:
+                    ROOT_DIRECTORY: << parameters.root_directory >>
+                name: Build sg-property-barcoder tarball.
+            - run:
+                command: |
+                    mkdir python_packages
+                    cp "${ROOT_DIRECTORY}/artefacts/python_packages/sg-property-barcoder-v2/dist/${PACKAGE_NAME}" ./python_packages
+                environment:
+                    PACKAGE_NAME: << parameters.package_name >>
+                    ROOT_DIRECTORY: << parameters.root_directory >>
+                name: Copy built tarballs.
+            - run:
+                command: ls ./python_packages
+                name: List build packages.
+            - persist_to_workspace:
+                paths:
+                    - '*.tar.gz'
+                root: python_packages
+    checkout_submodules:
+        description: |
+            Checkout submodules in Git.
+        steps:
+            - run:
+                command: |
+                    git submodule sync
+                    git submodule update --init --recursive
+                name: checkout submodules
+    compile_kubeflow_pipelines:
+        description: |
+            Install, compile and copy Kubeflow pipelines.
+
+            This command will recursively look for kubeflow pipelines that follow the `kubeflow_pipeline_*.py` naming syntax in the root directory and compile them to `kube_pipeline_*.json`. The pipelines are copied to the Airflow data directory once compiled.
+        parameters:
+            kfp_version:
+                description: The version of Kubeflow Pipelines to install. <https://pypi.org/project/kfp/>
+                type: string
+            root_directory:
+                default: /root/kraken
+                description: Root directory to recursively search for Python Kubeflow pipeline files.
+                type: string
+        steps:
+            - run:
+                command: |
+                    kfp_installed=$(python3 -c 'import pkgutil; print(1 if pkgutil.find_loader("kfp") else 0)')
+                    if test $kfp_installed -eq 0; then python3 -m pip install kfp=="<< parameters.kfp_version >>"; fi
+                name: Install Kubeflow
+            - run:
+                command: fd -e py "^kubeflow_pipeline_" << parameters.root_directory >> -x python3 {}
+                name: Compile Kubeflow pipelines
+            - run:
+                command: fd -HI -e json "^kubeflow_pipeline_" << parameters.root_directory >> -x cp {} << parameters.root_directory >>/data/kubeflow/pipelines
+                name: Copy compiled Kubeflow pipelines
+    copy_airflow_variables:
+        description: |
+            Merge and copy Airflow variables json into the Airflow variables directory.
+
+            This command takes a json string `airflow_variables_files` containing the location to the json files relative to the `root_directory`.
+
+            The json files will be merged into a single json file to be sent to Airflow.
+        parameters:
+            airflow_variables_files:
+                description: A json string containing the path to the Airflow variables files to be sent to Airflow. This path is relative to the `root_directory`.
+                type: string
+            root_directory:
+                default: /root/kraken
+                description: Root directory.
+                type: string
+        steps:
+            - run:
+                command: |
+                    #!/bin/bash
+
+                    cat \<< EOF > "$ROOT_DIRECTORY/merge_airflow_variables.py"
+                    import argparse
+                    import json
+                    import subprocess
 
 
-  - GCP_PROJECT_ID - the name of the project in GCP.
+                    def main(argv=None):
+                        # define args
+                        parser = argparse.ArgumentParser()
+                        parser.add_argument("--files", dest="files", required=True, type=str)
+                        known_args, _ = parser.parse_known_args(argv)
 
-  - GCP_PROJECT_NUMBER - project number ID.
+                        # create the syntax for jq -s to merge JSON files
+                        variable_files = json.loads(known_args.files)
+                        _indexes = [f" .[{index}] *" for index, _ in enumerate(variable_files)]
+                        jq_indexes = "".join(_indexes)[1:-2]
 
-  - GCP_SERVICE_ACCOUNT_EMAIL - the service account to use.
+                        # run jq
+                        value = subprocess.run(
+                            ["jq", "-s", f"{jq_indexes}", *variable_files], check=True, text=True, shell=False, capture_output=True
+                        )
 
-  - GCP_WIP_ID - the Workload Identity Pool ID.
-
-  - GCP_WIP_PROVIDER_ID - the Workload Identity Pool Provider ID.
-
-
-  For building & pushing to Artifact Registry:
-
-
-  - GCP_REGION - the region in GCP.
-docker:
-  - image: google/cloud-sdk:<< parameters.gcp_sdk_version >>
-parameters:
-  artifact_repository:
-    description: The name of the repository in Artifact Registry.
-    type: string
-  attach_workspace:
-    default: false
-    description: Attach a CircleCI workspace.
-    type: boolean
-  build_timeout:
-    default: 45m
-    description: >-
-      The timeout value to use if no output is detected from Cloudbuild after
-      this time.
-    type: string
-  checkout_directory:
-    default: /root/kraken
-    description: The local directory to checkout the repository to.
-    type: string
-  cloudbuild_yaml_filename:
-    description: >-
-      The filename of the cloudbuild.yml inside the `path_to_cloudbuild_yaml`
-      directory.
-    type: string
-  context_dir:
-    description: >
-      The directory to use as the root context when building the Dockerfile.
+                        # print output
+                        print(value.stdout)
 
 
-      In most cases this will be the same directory where the cloudbuild.yml is
-      located.
+                    if __name__ == "__main__":
+                        main()
+                    EOF
 
+                    python3 "$ROOT_DIRECTORY/merge_airflow_variables.py" --files "$AIRFLOW_VARIABLES_FILES" >> "$ROOT_DIRECTORY/data/airflow_variables/variables.json"
+                environment:
+                    AIRFLOW_VARIABLES_FILES: << parameters.airflow_variables_files >>
+                    ROOT_DIRECTORY: << parameters.root_directory >>
+                name: Merge Airflow variables
+    copy_bigquery_sql:
+        description: |
+            Copy Bigquery SQL into the Airflow dags directory.
 
-      If your build requires files in parent directories relative to the
-      Dockerfile, you can specify which directory should be used.
+            This command will recursively look for BigQuery SQL files that follow the `create_bq_*.sql` naming syntax in the root directory.
+        parameters:
+            root_directory:
+                default: /root/kraken
+                description: Root directory to recursively search for Bigquery SQL files.
+                type: string
+        steps:
+            - run:
+                command: fd -e sql "create_bq_" $ROOT_DIRECTORY -x cp {} $ROOT_DIRECTORY/dags/bq_queries
+                environment:
+                    ROOT_DIRECTORY: << parameters.root_directory >>
+                name: Copy pipelines Bigquery SQL
+    copy_custom_modules:
+        description: |
+            Copy Airflow custom Python modules into the Airflow custom modules directory.
 
+            This command will recursively look for Python modules in the Airflow custom modules directory.
+        parameters:
+            root_directory:
+                default: /root/kraken
+                description: Root directory.
+                type: string
+        steps:
+            - run:
+                command: fd -HI -d 1 . $ROOT_DIRECTORY/airflow/custom_modules -x cp -R {} $ROOT_DIRECTORY/dags
+                environment:
+                    ROOT_DIRECTORY: << parameters.root_directory >>
+                name: Copy Airflow Custom Module
+    copy_dag_utils:
+        description: |
+            Copy Airflow DAG utils json into the Airflow config directory.
 
-      Your cloudbuild.yml and Dockerfile must reference files/paths relative to
-      this context dir.
-    type: string
-  gcp_cred_config_file_path:
-    default: .circleci/gcp_cred_config.json
-    description: The path where the credentials config path should be saved to.
-    type: string
-  gcp_sdk_version:
-    default: 437.0.0
-    description: The version to use for the GCP SDK.
-    type: string
-  google_project_id:
-    default: GCP_PROJECT_ID
-    description: >-
-      The name of the environment variable containing the name of the project in
-      GCP.
-    type: string
-  google_project_number:
-    default: GCP_PROJECT_NUMBER
-    description: The name of the environment variable containing the project number ID.
-    type: string
-  google_region:
-    default: GCP_REGION
-    description: The name of the environment variable containing the region in GCP.
-    type: string
-  image_name:
-    description: The name of the image to build.
-    type: string
-  path_to_cloudbuild_yaml:
-    description: >-
-      The path to the directory inside the repository containing the
-      cloudbuild.yml.
-    type: string
-  remove_untagged:
-    default: true
-    description: >
-      If `true` will remove any untagged images after the new image has been
-      built.
+            This command will copy the Airflow config DAG config json file in `utils/airflow_config/dag_config.json` to the Airflow DAGs directory.
+        parameters:
+            root_directory:
+                default: /root/kraken
+                description: Root directory.
+                type: string
+        steps:
+            - run:
+                command: cp $ROOT_DIRECTORY/utils/airflow_config/dag_config.json $ROOT_DIRECTORY/dags/utils/airflow_config/dag_config.json
+                environment:
+                    ROOT_DIRECTORY: << parameters.root_directory >>
+                name: Copy DAG utils JSON
+    copy_dags:
+        description: |
+            Copy Airflow DAGs into the Airflow data directory.
 
+            This command will recursively look for Airflow DAGs that follow the `dag_*.py` naming syntax in the root directory.
+        parameters:
+            root_directory:
+                default: /root/kraken
+                description: Root directory to recursively search for Airflow DAGs.
+                type: string
+        steps:
+            - run:
+                command: fd -e py "dag_" $ROOT_DIRECTORY -x cp {} $ROOT_DIRECTORY/dags
+                environment:
+                    ROOT_DIRECTORY: << parameters.root_directory >>
+                name: Copy DAGs
+    copy_merge_queries:
+        description: |
+            Copy merge queries into the Airflow data directory.
 
-      This allows building an image to a `latest` tag and removing the old
-      untagged image when a new image has been built.
-    type: boolean
-  service_account_email:
-    default: GCP_SERVICE_ACCOUNT_EMAIL
-    description: >-
-      The name of the environment variable containing the service account to
-      use.
-    type: string
-  substitutions:
-    default: ''
-    description: Any substitutions to use when building the image with Cloudbuild.
-    type: string
-  use_kaniko:
-    default: true
-    description: >-
-      If `true` use the Kaniko builder in Cloudbuild. This provides cached
-      layers for quicker repeatable builds.
-    type: boolean
-  workload_identity_pool_id:
-    default: GCP_WIP_ID
-    description: >-
-      The name of the environment variable containing the Workload Identity Pool
-      ID.
-    type: string
-  workload_identity_pool_provider_id:
-    default: GCP_WIP_PROVIDER_ID
-    description: >-
-      The name of the environment variable containing the Workload Identity Pool
-      Provider ID.
-    type: string
-  workspace_directory:
-    default: ''
-    description: The full directory path where to attach the workspace.
-    type: string
-resource_class: small
-steps:
-  - checkout:
-      path: << parameters.checkout_directory >>
-  - checkout_submodules
-  - when:
-      condition:
-        equal:
-          - true
-          - << parameters.attach_workspace >>
-      steps:
-        - attach_workspace:
-            at: << parameters.workspace_directory >>
-  - gcp_auth_oidc:
-      gcp_cred_config_file_path: << parameters.gcp_cred_config_file_path >>
-      gcp_sdk_version: << parameters.gcp_sdk_version >>
-      google_project_id: << parameters.google_project_id >>
-      google_project_number: << parameters.google_project_number >>
-      service_account_email: << parameters.service_account_email >>
-      workload_identity_pool_id: << parameters.workload_identity_pool_id >>
-      workload_identity_pool_provider_id: << parameters.workload_identity_pool_provider_id >>
-  - build_docker_image_cloudbuild:
-      artifact_repository: << parameters.artifact_repository >>
-      build_timeout: << parameters.build_timeout >>
-      cloudbuild_yaml_filename: << parameters.cloudbuild_yaml_filename >>
-      context_dir: << parameters.context_dir >>
-      image_name: << parameters.image_name >>
-      path_to_cloudbuild_yaml: << parameters.path_to_cloudbuild_yaml >>
-      remove_untagged: << parameters.remove_untagged >>
-      root_directory: << parameters.checkout_directory >>
-      substitutions: << parameters.substitutions >>
-      use_kaniko: << parameters.use_kaniko >>
-  - slack_notification_build_fail
-working_directory: << parameters.checkout_directory >>
+            This command will recursively look for merge queries that follow the `merge_query_*.sql` naming syntax in the root directory.
+        parameters:
+            root_directory:
+                default: /root/kraken
+                description: Root directory to recursively search for merge query files.
+                type: string
+        steps:
+            - run:
+                command: fd -e sql "merge_query_" $ROOT_DIRECTORY -x cp {} $ROOT_DIRECTORY/dags/templates
+                environment:
+                    ROOT_DIRECTORY: << parameters.root_directory >>
+                name: Copy Merge Queries
+    copy_pipelines:
+        description: |
+            Copy Beam pipelines into the Airflow data directory.
+
+            This command will recursively look for Beam pipelines that follow the `beam_*.py` naming syntax in the root directory.
+        parameters:
+            root_directory:
+                default: /root/kraken
+                description: Root directory to recursively search for Beam pipelines.
+                type: string
+        steps:
+            - run:
+                command: fd -e py "beam_" $ROOT_DIRECTORY -x cp {} $ROOT_DIRECTORY/data/pipelines
+                environment:
+                    ROOT_DIRECTORY: << parameters.root_directory >>
+                name: Copy Pipelines
+    copy_postgres_sql:
+        description: |
+            Copy Postgres SQL into the Airflow dags directory.
+
+            This command will recursively look for Postgres SQL files that follow the `create_postgres_*.sql` naming syntax in the root directory.
+        parameters:
+            root_directory:
+                default: /root/kraken
+                description: Root directory to recursively search for postgres SQL files.
+                type: string
+        steps:
+            - run:
+                command: fd -e sql "create_postgres_" $ROOT_DIRECTORY -x cp {} $ROOT_DIRECTORY/dags/postgres_queries
+                environment:
+                    ROOT_DIRECTORY: << parameters.root_directory >>
+                name: Copy pipelines postgres SQL
+    create_airflow_postgres_db_connection:
+        description: |
+            Create Airflow Connection to Postgres DB.
+
+            This command assumes you have created the following environment variables in a CircleCI context:
+
+            For Postgres (these names are fixed and are not configurable in the parameters below):
+
+            - `DB_USER` - the username for postgres.
+            - `DB_PASSWORD` - the password for the postgres user.
+            - `DB_HOST` - the host for postgres.
+            - `DB_NAME` - the name of the postgres db.
+            - `DB_INSTANCE` - the name of the postgres instance.
+
+            For copying to Airflow (these names are configurable in the parameters below):
+
+            - GCP_PROJECT_ID - the name of the project.
+            - GCP_REGION - the region in GCP.
+        parameters:
+            cloud_composer_name:
+                description: The name of the Cloud Composer environment.
+                type: string
+            google_project_id:
+                default: GCP_PROJECT_ID
+                description: The name of the environment variable containing the name of the project in GCP.
+                type: string
+            google_region:
+                default: GCP_REGION
+                description: The name of the environment variable containing the region in GCP.
+                type: string
+            root_directory:
+                default: /root/kraken
+                description: Root directory.
+                type: string
+        steps:
+            - run:
+                command: |
+                    #!/bin/bash
+
+                    if gcloud composer environments run "$CLOUD_COMPOSER_NAME" --project "${!ORB_GOOGLE_PROJECT_ID}" \
+                        --location="${!ORB_GOOGLE_REGION}" connections get -- 'Kraken V2 DB Connection'; then
+                        gcloud composer environments run "$CLOUD_COMPOSER_NAME" --project "${!ORB_GOOGLE_PROJECT_ID}" \
+                            --location="${!ORB_GOOGLE_REGION}" connections delete -- 'Kraken V2 DB Connection'
+                    fi
+
+                    gcloud composer environments run "$CLOUD_COMPOSER_NAME" --project "${!ORB_GOOGLE_PROJECT_ID}" \
+                        --location="${!ORB_GOOGLE_REGION}" connections add -- 'Kraken V2 DB Connection' --conn-json \
+                        '
+                        {
+                            "conn_type": "Google Cloud SQL Database",
+                            "login": "'"${DB_USER}"'",
+                            "password": "'"${DB_PASSWORD}"'",
+                            "host": "'"${DB_HOST}"'",
+                            "port": 3306,
+                            "schema": "'"${DB_NAME}"'",
+                            "extra": {
+                                "database_type": "postgres",
+                                "project_id": "'"${!ORB_GOOGLE_PROJECT_ID}"'",
+                                "location": "'"${!ORB_GOOGLE_REGION}"'",
+                                "instance": "'"${DB_INSTANCE}"'",
+                                "use_proxy": true,
+                                "sql_proxy_use_tcp": true
+                            }
+                        }
+                        '
+                environment:
+                    CLOUD_COMPOSER_NAME: << parameters.cloud_composer_name >>
+                    ORB_GOOGLE_PROJECT_ID: << parameters.google_project_id >>
+                    ORB_GOOGLE_REGION: << parameters.google_region >>
+                    ROOT_DIRECTORY: << parameters.root_directory >>
+                name: Create Airflow Connection to Postgres DB
+    create_local_airflow_directories:
+        description: Create directories to be copied into Airflow
+        parameters:
+            root_directory:
+                default: /root/kraken
+                description: Root directory.
+                type: string
+        steps:
+            - run:
+                command: |
+                    #!/bin/bash
+
+                    directories=(
+                        "$ROOT_DIRECTORY/dags"
+                        "$ROOT_DIRECTORY/dags/templates"
+                        "$ROOT_DIRECTORY/dags/utils/airflow_config"
+                        "$ROOT_DIRECTORY/data/pipelines"
+                        "$ROOT_DIRECTORY/dags/sql_queries"
+                        "$ROOT_DIRECTORY/dags/bq_queries"
+                        "$ROOT_DIRECTORY/dags/postgres_queries"
+                        "$ROOT_DIRECTORY/data/airflow_variables"
+                        "$ROOT_DIRECTORY/data/kubeflow/pipelines"
+                    )
+                    for DIR in "${directories[@]}"; do
+                        mkdir -p "$DIR"
+                    done
+                environment:
+                    ROOT_DIRECTORY: << parameters.root_directory >>
+                name: Create Directories to be Copied into Airflow
+    deploy_to_cloudrun:
+        description: |
+            Deploy an image to Cloud Run.
+        parameters:
+            allow_unauthenticated:
+                default: ""
+                description: |
+                    Allow unauthenticated requests to the Cloud Run endpoint.
+
+                    This optional parameter takes "true" as a string. Omit this parameter or pass the empty string to to deny unauthenticated requests.
+                type: string
+            cloud_run_cloud_sql_instances:
+                default: ""
+                description: The name of a Cloud SQL instance to connect to. This requires a VPC connector in the same network as the Cloud SQL instance to connect.
+                type: string
+            cloud_run_concurrency:
+                default: ""
+                description: The number of concurrent requests to serve. E.g "1"
+                type: string
+            cloud_run_cpu:
+                default: ""
+                description: The cpu value to use. E.g "1"
+                type: string
+            cloud_run_env_vars:
+                default: ""
+                description: |
+                    Environment variables to use for the deployed Cloud Run instance.
+
+                    This value is passed to the `--set-env-vars` flag.
+
+                    See the Cloud Run documentation for the string to pass to this flag (https://cloud.google.com/run/docs/configuring/environment-variables#command-line).
+                type: string
+            cloud_run_max_instances:
+                default: ""
+                description: The maximum number of instances for Cloud Run.
+                type: string
+            cloud_run_memory:
+                default: ""
+                description: The memory value to use. E.g "512Mi"
+                type: string
+            cloud_run_min_instances:
+                default: ""
+                description: The minimum number of instances for Cloud Run.
+                type: string
+            cloud_run_name:
+                description: The name of the Cloud Run deployment to use.
+                type: string
+            cloud_run_service_account:
+                default: ""
+                description: The service account to use for Cloud Run.
+                type: string
+            cloud_run_vpc_connector:
+                default: ""
+                description: The name of a VPC connector to use for Cloud Run.
+                type: string
+            gcp_cred_config_file_path:
+                default: .circleci/gcp_cred_config.json
+                description: The path where the credentials config path should be saved to.
+                type: string
+            google_project_id:
+                default: GCP_PROJECT_ID
+                description: The name of the environment variable containing the name of the project in GCP.
+                type: string
+            google_project_number:
+                default: GCP_PROJECT_NUMBER
+                description: The name of the environment variable containing the project number ID.
+                type: string
+            google_region:
+                default: GCP_REGION
+                description: The name of the environment variable containing the region in GCP.
+                type: string
+            image_name:
+                description: The name of the image to deploy in Artifact Registry.
+                type: string
+            service_account_email:
+                default: GCP_SERVICE_ACCOUNT_EMAIL
+                description: The name of the environment variable containing the service account to use.
+                type: string
+            workload_identity_pool_id:
+                default: GCP_WIP_ID
+                description: The name of the environment variable containing the Workload Identity Pool ID.
+                type: string
+            workload_identity_pool_provider_id:
+                default: GCP_WIP_PROVIDER_ID
+                description: The name of the environment variable containing the Workload Identity Pool Provider ID.
+                type: string
+        steps:
+            - run:
+                command: |
+                    #!/bin/bash
+
+                    if [ -n "${ORB_ALLOW_UNAUTHENTICATED}" ]; then
+                        set -- "$@" --allow-unauthenticated
+                    fi
+
+                    if [ -n "${ORB_CLOUD_RUN_MEMORY}" ]; then
+                        set -- "$@" --memory="${ORB_CLOUD_RUN_MEMORY}"
+                    fi
+
+                    if [ -n "${ORB_CLOUD_RUN_CPU}" ]; then
+                        set -- "$@" --cpu="${ORB_CLOUD_RUN_CPU}"
+                    fi
+
+                    if [ -n "${ORB_CLOUD_RUN_CONCURRENCY}" ]; then
+                        set -- "$@" --concurrency="${ORB_CLOUD_RUN_CONCURRENCY}"
+                    fi
+
+                    if [ -n "${ORB_CLOUD_RUN_ENV_VARS}" ]; then
+                        set -- "$@" --set-env-vars="${ORB_CLOUD_RUN_ENV_VARS}"
+                    fi
+
+                    if [ -n "${ORB_CLOUD_RUN_SERVICE_ACCOUNT}" ]; then
+                        set -- "$@" --service-account="${ORB_CLOUD_RUN_SERVICE_ACCOUNT}"
+                    fi
+
+                    if [ -n "${ORB_CLOUD_RUN_MIN_INSTANCES}" ]; then
+                        set -- "$@" --min-instances="${ORB_CLOUD_RUN_MIN_INSTANCES}"
+                    fi
+
+                    if [ -n "${ORB_CLOUD_RUN_MAX_INSTANCES}" ]; then
+                        set -- "$@" --max-instances="${ORB_CLOUD_RUN_MAX_INSTANCES}"
+                    fi
+
+                    if [ -n "${ORB_CLOUD_RUN_VPC_CONNECTOR}" ]; then
+                        set -- "$@" --vpc-connector="${ORB_CLOUD_RUN_VPC_CONNECTOR}"
+                    fi
+
+                    if [ -n "${ORB_CLOUD_RUN_CLOUD_SQL_INSTANCES}" ]; then
+                        set -- "$@" --add-cloudsql-instances="${ORB_CLOUD_RUN_CLOUD_SQL_INSTANCES}"
+                    fi
+
+                    gcloud --project "${!ORB_GOOGLE_PROJECT_ID}" run deploy "${ORB_CLOUD_RUN_NAME}" \
+                        --region "${!ORB_GOOGLE_REGION}" \
+                        --image "${ORB_IMAGE_NAME}" \
+                        "$@"
+                environment:
+                    ORB_ALLOW_UNAUTHENTICATED: << parameters.allow_unauthenticated >>
+                    ORB_CLOUD_RUN_CLOUD_SQL_INSTANCES: << parameters.cloud_run_cloud_sql_instances >>
+                    ORB_CLOUD_RUN_CONCURRENCY: << parameters.cloud_run_concurrency >>
+                    ORB_CLOUD_RUN_CPU: << parameters.cloud_run_cpu >>
+                    ORB_CLOUD_RUN_ENV_VARS: << parameters.cloud_run_env_vars >>
+                    ORB_CLOUD_RUN_MAX_INSTANCES: << parameters.cloud_run_max_instances >>
+                    ORB_CLOUD_RUN_MEMORY: << parameters.cloud_run_memory >>
+                    ORB_CLOUD_RUN_MIN_INSTANCES: << parameters.cloud_run_min_instances >>
+                    ORB_CLOUD_RUN_NAME: << parameters.cloud_run_name >>
+                    ORB_CLOUD_RUN_SERVICE_ACCOUNT: << parameters.cloud_run_service_account >>
+                    ORB_CLOUD_RUN_VPC_CONNECTOR: << parameters.cloud_run_vpc_connector >>
+                    ORB_GOOGLE_PROJECT_ID: << parameters.google_project_id >>
+                    ORB_GOOGLE_REGION: << parameters.google_region >>
+                    ORB_IMAGE_NAME: << parameters.image_name >>
+                name: Deploy to Cloud Run
+    gcp_auth_oidc:
+        description: |
+            Authenticate with GCP using OIDC. This command assumes you have followed the instructions at https://docs.data.api.street.co.uk/tooling-ops/circle-ci/authenticating-gcp-wi.html to create and configure a Workload Identity Pool & Provider for CircleCI to use.
+
+            In order to use OIDC/Workload Identity ensure you have a CircleCI context with the following environment variables set:
+
+            - GCP_PROJECT_ID - the name of the project.
+            - GCP_PROJECT_NUMBER - project number ID.
+            - GCP_SERVICE_ACCOUNT_EMAIL - the service account to use.
+            - GCP_WIP_ID - the Workload Identity Pool ID.
+            - GCP_WIP_PROVIDER_ID - the Workload Identity Pool Provider ID.
+        parameters:
+            gcp_cred_config_file_path:
+                default: .circleci/gcp_cred_config.json
+                description: The path where the credentials config path should be saved to.
+                type: string
+            gcp_sdk_version:
+                default: 437.0.0
+                description: The version to use for the GCP SDK.
+                type: string
+            google_project_id:
+                default: GCP_PROJECT_ID
+                description: The name of the environment variable containing the name of the project in GCP.
+                type: string
+            google_project_number:
+                default: GCP_PROJECT_NUMBER
+                description: The name of the environment variable containing the project number ID.
+                type: string
+            service_account_email:
+                default: GCP_SERVICE_ACCOUNT_EMAIL
+                description: The name of the environment variable containing the service account to use.
+                type: string
+            workload_identity_pool_id:
+                default: GCP_WIP_ID
+                description: The name of the environment variable containing the Workload Identity Pool ID.
+                type: string
+            workload_identity_pool_provider_id:
+                default: GCP_WIP_PROVIDER_ID
+                description: The name of the environment variable containing the Workload Identity Pool Provider ID.
+                type: string
+        steps:
+            - gcp-cli/setup:
+                gcp_cred_config_file_path: << parameters.gcp_cred_config_file_path >>
+                google_project_id: << parameters.google_project_id >>
+                google_project_number: << parameters.google_project_number >>
+                service_account_email: << parameters.service_account_email >>
+                use_oidc: true
+                version: << parameters.gcp_sdk_version >>
+                workload_identity_pool_id: << parameters.workload_identity_pool_id >>
+                workload_identity_pool_provider_id: << parameters.workload_identity_pool_provider_id >>
+    import_airflow_variables:
+        description: |
+            Import variables to Airflow using gcloud CLI.
+
+            This command will import all Airflow variables to the Cloud Composer environment.
+
+            This command assumes you have created the following environment variables in a CircleCI context:
+
+            For importing to Airflow (these names are configurable in the parameters below):
+
+            - GCP_PROJECT_ID - the name of the project.
+            - GCP_REGION - the region in GCP.
+        parameters:
+            cloud_composer_name:
+                description: The name of the Cloud Composer environment.
+                type: string
+            google_project_id:
+                default: GCP_PROJECT_ID
+                description: The name of the environment variable containing the name of the project in GCP.
+                type: string
+            google_region:
+                default: GCP_REGION
+                description: The name of the environment variable containing the region in GCP.
+                type: string
+        steps:
+            - run:
+                command: |
+                    gcloud composer environments run $CLOUD_COMPOSER_NAME \
+                      --project "${!ORB_GOOGLE_PROJECT_ID}" \
+                      --location "${!ORB_GOOGLE_REGION}" \
+                      variables \
+                      -- import /home/airflow/gcs/data/airflow_variables/variables.json
+                environment:
+                    CLOUD_COMPOSER_NAME: << parameters.cloud_composer_name >>
+                    ORB_GOOGLE_PROJECT_ID: << parameters.google_project_id >>
+                    ORB_GOOGLE_REGION: << parameters.google_region >>
+                name: Import Airflow Variables
+    install_fd:
+        description: Download and install fd <https://github.com/sharkdp/fd>
+        parameters:
+            fd_version:
+                default: v8.4.0-x86_64-unknown-linux-gnu
+                description: The version of fd to install. <https://github.com/sharkdp/fd>
+                type: string
+            with_sudo:
+                default: false
+                description: Use sudo to install fd.
+                type: boolean
+        steps:
+            - build-tools/install-ci-tools
+            - run:
+                command: |
+                    wget https://github.com/sharkdp/fd/releases/download/v8.4.0/fd-<< parameters.fd_version >>.tar.gz -O /tmp/fd-<< parameters.fd_version >>.tar.gz
+                    cd /tmp
+                    tar xfvz ./fd-<< parameters.fd_version >>.tar.gz
+                name: Download fd
+            - when:
+                condition:
+                    equal:
+                        - true
+                        - << parameters.with_sudo >>
+                steps:
+                    - run:
+                        command: |
+                            sudo cp /tmp/fd-<< parameters.fd_version >>/fd /usr/local/bin/fd
+                            sudo chmod +x /usr/local/bin/fd
+                        name: Install fd
+            - when:
+                condition:
+                    equal:
+                        - false
+                        - << parameters.with_sudo >>
+                steps:
+                    - run:
+                        command: |
+                            cp /tmp/fd-<< parameters.fd_version >>/fd /usr/local/bin/fd
+                            chmod +x /usr/local/bin/fd
+                        name: Install fd
+    install_kubectl:
+        description: Download and install kubectl
+        steps:
+            - run:
+                command: gcloud components install kubectl
+                name: Install kubectl using GCloud CLI
+    install_pip:
+        description: Install Pip
+        steps:
+            - run:
+                command: |
+                    apt-get install -y python3-pip > /dev/null 2>&1
+                    echo "Successfully installed pip"
+                name: Install Pip
+    install_sops:
+        description: Download and install SOPS <https://github.com/mozilla/sops>
+        parameters:
+            sops_version:
+                default: v3.7.3
+                description: The version of sops to install. <https://github.com/mozilla/sops>
+                type: string
+            with_sudo:
+                default: false
+                description: Use sudo to install fd.
+                type: boolean
+        steps:
+            - build-tools/install-ci-tools
+            - when:
+                condition:
+                    equal:
+                        - true
+                        - << parameters.with_sudo >>
+                steps:
+                    - run:
+                        command: |
+                            sudo wget https://github.com/mozilla/sops/releases/download/<< parameters.sops_version >>/sops-<< parameters.sops_version >>.linux.amd64 -O /usr/local/bin/sops
+                            sudo chmod +x /usr/local/bin/sops
+                        name: Download & Install SOPS
+            - when:
+                condition:
+                    equal:
+                        - false
+                        - << parameters.with_sudo >>
+                steps:
+                    - run:
+                        command: |
+                            wget https://github.com/mozilla/sops/releases/download/<< parameters.sops_version >>/sops-<< parameters.sops_version >>.linux.amd64 -O /usr/local/bin/sops
+                            chmod +x /usr/local/bin/sops
+                        name: Download & Install SOPS
+    plan_apply_terraform:
+        description: |
+            Plan & Apply Terraform
+        parameters:
+            path:
+                description: The path to the Terraform module
+                type: string
+            workspace:
+                description: The Terraform workspace name to use.
+                type: string
+        steps:
+            - terraform/init
+            - terraform/plan:
+                path: << parameters.path >>
+                workspace: << parameters.workspace >>
+            - terraform/apply:
+                path: << parameters.path >>
+                plan: plan.out
+                workspace: << parameters.workspace >>
+    slack_notification_build_fail:
+        description: |
+            Send a notification to #data-team-circleci-builds in Slack on build fail.
+        steps:
+            - slack/notify:
+                custom: |
+                    {
+                      "blocks": [
+                        {
+                          "type": "header",
+                          "text": {
+                            "type": "plain_text",
+                            "emoji": true,
+                            "text": ":rotating_light_animated: Workflow failed! :bangbang_animated:"
+                          }
+                        },
+                        {
+                          "type": "divider"
+                        },
+                        {
+                          "type": "section",
+                          "fields": [
+                            {
+                              "type": "mrkdwn",
+                              "text": "*Repo:*\n$CIRCLE_PROJECT_REPONAME"
+                            },
+                            {
+                              "type": "mrkdwn",
+                              "text": "*Branch:*\n$CIRCLE_BRANCH"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "section",
+                          "text": {
+                            "type": "mrkdwn",
+                            "text": "*URL:* <$CIRCLE_BUILD_URL>"
+                          }
+                        },
+                        {
+                          "type": "context",
+                          "elements": [
+                            {
+                              "type": "mrkdwn",
+                              "text": ":saluting_face_animated: by $CIRCLE_USERNAME"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                event: fail
+    sync_to_airflow_bucket:
+        description: |
+            Copy files to the Cloud Composer Airflow GCS bucket using gsutil rsync.
+
+            This command will sync files to the bucket, any files present in the bucket but not locally will be removed from Airflow.
+        parameters:
+            airflow_bucket:
+                description: The name of the GCS bucket for airflow without the leading `gs://` and trailing `/`
+                type: string
+            root_directory:
+                default: /root/kraken
+                description: Root directory to recursively search for Beam pipelines.
+                type: string
+        steps:
+            - run:
+                command: |
+                    #!/bin/bash
+
+                    directories=(
+                        "$ROOT_DIRECTORY/dags"
+                        "$ROOT_DIRECTORY/data/pipelines"
+                        "$ROOT_DIRECTORY/data/airflow_variables"
+                        "$ROOT_DIRECTORY/data/kubeflow/pipelines"
+                    )
+                    remote_directories=(
+                        "dags"
+                        "data/pipelines"
+                        "data/airflow_variables"
+                        "data/kubeflow/pipelines"
+                    )
+
+                    for ((i = 0; i < ${#directories[@]}; ++i)); do
+                        gsutil -m rsync -d -r -x "sg_airflow_custom\/.*|dynamo_export_pipeline\/.*|\/tests.*|.*\.egg-info.*|.*\.md|.*\.pdf" "${directories[$i]}" "gs://$AIRFLOW_BUCKET/${remote_directories[$i]}"
+                    done
+                environment:
+                    AIRFLOW_BUCKET: << parameters.airflow_bucket >>
+                    ROOT_DIRECTORY: << parameters.root_directory >>
+                name: Copy files to Airflow bucket using rsync
+executors:
+    default:
+        description: |
+            This is a sample executor using Docker and Node. If you want to provide a custom environment in your orb, insert your image here. If you do not require an executor, you can simply delete this directory.
+        docker:
+            - image: cimg/node:<<parameters.tag>>
+        parameters:
+            tag:
+                default: lts
+                description: |
+                    Pick a specific cimg/node image variant: https://hub.docker.com/r/cimg/node/tags
+                type: string
+jobs:
+    build_custom_python_packages:
+        description: |
+            Build custom Python packages for Kraken.
+
+            This job will build the following packages and make them available in a CircleCI workspace:
+
+            - sg-property-barcoder-v2
+        docker:
+            - image: cimg/python:3.8
+        parameters:
+            checkout_directory:
+                default: /root/kraken
+                description: The local directory to checkout the repository to.
+                type: string
+        resource_class: small
+        steps:
+            - checkout:
+                path: << parameters.checkout_directory >>
+            - checkout_submodules
+            - build_python_package_sg_barcoder:
+                root_directory: << parameters.checkout_directory >>
+            - slack_notification_build_fail
+        working_directory: << parameters.checkout_directory >>
+    build_image_with_cloudbuild:
+        description: |
+            Build a Docker image using GCP Cloud Build and push to Artifact Registry.
+
+            This job assumes you have created the following environment variables in a CircleCI context:
+
+            For authenticating to GCP (these names are configurable in the parameters below):
+
+            - GCP_PROJECT_ID - the name of the project in GCP.
+            - GCP_PROJECT_NUMBER - project number ID.
+            - GCP_SERVICE_ACCOUNT_EMAIL - the service account to use.
+            - GCP_WIP_ID - the Workload Identity Pool ID.
+            - GCP_WIP_PROVIDER_ID - the Workload Identity Pool Provider ID.
+
+            For building & pushing to Artifact Registry:
+
+            - GCP_REGION - the region in GCP.
+        docker:
+            - image: google/cloud-sdk:<< parameters.gcp_sdk_version >>
+        parameters:
+            artifact_repository:
+                description: The name of the repository in Artifact Registry.
+                type: string
+            attach_workspace:
+                default: false
+                description: Attach a CircleCI workspace.
+                type: boolean
+            build_timeout:
+                default: 45m
+                description: The timeout value to use if no output is detected from Cloudbuild after this time.
+                type: string
+            checkout_directory:
+                default: /root/kraken
+                description: The local directory to checkout the repository to.
+                type: string
+            cloudbuild_yaml_filename:
+                description: The filename of the cloudbuild.yml inside the `path_to_cloudbuild_yaml` directory.
+                type: string
+            context_dir:
+                description: |
+                    The directory to use as the root context when building the Dockerfile.
+
+                    In most cases this will be the same directory where the cloudbuild.yml is located.
+
+                    If your build requires files in parent directories relative to the Dockerfile, you can specify which directory should be used.
+
+                    Your cloudbuild.yml and Dockerfile must reference files/paths relative to this context dir.
+                type: string
+            gcp_cred_config_file_path:
+                default: .circleci/gcp_cred_config.json
+                description: The path where the credentials config path should be saved to.
+                type: string
+            gcp_sdk_version:
+                default: 437.0.0
+                description: The version to use for the GCP SDK.
+                type: string
+            google_project_id:
+                default: GCP_PROJECT_ID
+                description: The name of the environment variable containing the name of the project in GCP.
+                type: string
+            google_project_number:
+                default: GCP_PROJECT_NUMBER
+                description: The name of the environment variable containing the project number ID.
+                type: string
+            google_region:
+                default: GCP_REGION
+                description: The name of the environment variable containing the region in GCP.
+                type: string
+            image_name:
+                description: The name of the image to build.
+                type: string
+            path_to_cloudbuild_yaml:
+                description: The path to the directory inside the repository containing the cloudbuild.yml.
+                type: string
+            remove_untagged:
+                default: true
+                description: |
+                    If `true` will remove any untagged images after the new image has been built.
+
+                    This allows building an image to a `latest` tag and removing the old untagged image when a new image has been built.
+                type: boolean
+            service_account_email:
+                default: GCP_SERVICE_ACCOUNT_EMAIL
+                description: The name of the environment variable containing the service account to use.
+                type: string
+            substitutions:
+                default: ""
+                description: Any substitutions to use when building the image with Cloudbuild.
+                type: string
+            use_kaniko:
+                default: true
+                description: If `true` use the Kaniko builder in Cloudbuild. This provides cached layers for quicker repeatable builds.
+                type: boolean
+            workload_identity_pool_id:
+                default: GCP_WIP_ID
+                description: The name of the environment variable containing the Workload Identity Pool ID.
+                type: string
+            workload_identity_pool_provider_id:
+                default: GCP_WIP_PROVIDER_ID
+                description: The name of the environment variable containing the Workload Identity Pool Provider ID.
+                type: string
+            workspace_directory:
+                default: ""
+                description: The full directory path where to attach the workspace.
+                type: string
+        resource_class: small
+        steps:
+            - checkout:
+                path: << parameters.checkout_directory >>
+            - checkout_submodules
+            - when:
+                condition:
+                    equal:
+                        - true
+                        - << parameters.attach_workspace >>
+                steps:
+                    - attach_workspace:
+                        at: << parameters.workspace_directory >>
+            - gcp_auth_oidc:
+                gcp_cred_config_file_path: << parameters.gcp_cred_config_file_path >>
+                gcp_sdk_version: << parameters.gcp_sdk_version >>
+                google_project_id: << parameters.google_project_id >>
+                google_project_number: << parameters.google_project_number >>
+                service_account_email: << parameters.service_account_email >>
+                workload_identity_pool_id: << parameters.workload_identity_pool_id >>
+                workload_identity_pool_provider_id: << parameters.workload_identity_pool_provider_id >>
+            - build_docker_image_cloudbuild:
+                artifact_repository: << parameters.artifact_repository >>
+                build_timeout: << parameters.build_timeout >>
+                cloudbuild_yaml_filename: << parameters.cloudbuild_yaml_filename >>
+                context_dir: << parameters.context_dir >>
+                image_name: << parameters.image_name >>
+                path_to_cloudbuild_yaml: << parameters.path_to_cloudbuild_yaml >>
+                remove_untagged: << parameters.remove_untagged >>
+                root_directory: << parameters.checkout_directory >>
+                substitutions: << parameters.substitutions >>
+                use_kaniko: << parameters.use_kaniko >>
+            - slack_notification_build_fail
+        working_directory: << parameters.checkout_directory >>
+    copy_to_airflow:
+        description: |
+            Copy Airflow DAGs, Beam pipelines, Kubeflow pipelines, merge queries and custom Airflow modules into the Cloud Composer GCS bucket to be synced to Airflow.
+
+            In addition this job will update the Airflow variables and Airflow connections.
+
+            This job assumes you have created the following environment variables in a CircleCI context:
+
+            For Postgres (these names are fixed and are not configurable in the parameters below):
+
+            - DB_USER - the username for postgres.
+            - DB_PASSWORD - the password for the postgres user.
+            - DB_HOST - the host for postgres.
+            - DB_NAME - the name of the postgres db.
+            - DB_INSTANCE - the name of the postgres instance.
+
+            For authenticating to GCP (these names are configurable in the parameters below):
+
+            - GCP_PROJECT_ID - the name of the project.
+            - GCP_PROJECT_NUMBER - project number ID.
+            - GCP_SERVICE_ACCOUNT_EMAIL - the service account to use.
+            - GCP_WIP_ID - the Workload Identity Pool ID.
+            - GCP_WIP_PROVIDER_ID - the Workload Identity Pool Provider ID.
+
+            For copying to Airflow (these names are configurable in the parameters below):
+
+            - GCP_REGION - the region in GCP.
+        docker:
+            - image: google/cloud-sdk:<< parameters.gcp_sdk_version >>
+        parameters:
+            airflow_bucket:
+                description: The name of the GCS bucket for airflow without the leading `gs://` and trailing `/`.
+                type: string
+            airflow_variables_files:
+                description: A json string containing the path to the Airflow variables files to be sent to Airflow. This path is relative to the `checkout_directory`.
+                type: string
+            checkout_directory:
+                default: /root/kraken
+                description: The local directory to checkout the repository to.
+                type: string
+            cloud_composer_name:
+                description: The name of the Cloud Composer environment.
+                type: string
+            gcp_cred_config_file_path:
+                default: .circleci/gcp_cred_config.json
+                description: The path where the credentials config path should be saved to.
+                type: string
+            gcp_sdk_version:
+                default: 437.0.0
+                description: The version to use for the GCP SDK.
+                type: string
+            google_project_id:
+                default: GCP_PROJECT_ID
+                description: The name of the environment variable containing the name of the project in GCP.
+                type: string
+            google_project_number:
+                default: GCP_PROJECT_NUMBER
+                description: The name of the environment variable containing the project number ID.
+                type: string
+            google_region:
+                default: GCP_REGION
+                description: The name of the environment variable containing the region in GCP.
+                type: string
+            kfp_version:
+                description: The version of Kubeflow Pipelines to install. <https://pypi.org/project/kfp/>.
+                type: string
+            service_account_email:
+                default: GCP_SERVICE_ACCOUNT_EMAIL
+                description: The name of the environment variable containing the service account to use.
+                type: string
+            with_sudo:
+                default: false
+                description: Use sudo when installing dependencies.
+                type: boolean
+            workload_identity_pool_id:
+                default: GCP_WIP_ID
+                description: The name of the environment variable containing the Workload Identity Pool ID.
+                type: string
+            workload_identity_pool_provider_id:
+                default: GCP_WIP_PROVIDER_ID
+                description: The name of the environment variable containing the Workload Identity Pool Provider ID.
+                type: string
+        resource_class: small
+        steps:
+            - checkout:
+                path: << parameters.checkout_directory >>
+            - checkout_submodules
+            - gcp_auth_oidc:
+                gcp_cred_config_file_path: << parameters.gcp_cred_config_file_path >>
+                gcp_sdk_version: << parameters.gcp_sdk_version >>
+                google_project_id: << parameters.google_project_id >>
+                google_project_number: << parameters.google_project_number >>
+                service_account_email: << parameters.service_account_email >>
+                workload_identity_pool_id: << parameters.workload_identity_pool_id >>
+                workload_identity_pool_provider_id: << parameters.workload_identity_pool_provider_id >>
+            - install_fd:
+                with_sudo: << parameters.with_sudo >>
+            - jq/install
+            - install_pip
+            - create_local_airflow_directories:
+                root_directory: << parameters.checkout_directory >>
+            - compile_kubeflow_pipelines:
+                kfp_version: << parameters.kfp_version >>
+                root_directory: << parameters.checkout_directory >>
+            - copy_dags:
+                root_directory: << parameters.checkout_directory >>
+            - copy_bigquery_sql:
+                root_directory: << parameters.checkout_directory >>
+            - copy_postgres_sql:
+                root_directory: << parameters.checkout_directory >>
+            - copy_pipelines:
+                root_directory: << parameters.checkout_directory >>
+            - copy_merge_queries:
+                root_directory: << parameters.checkout_directory >>
+            - copy_custom_modules:
+                root_directory: << parameters.checkout_directory >>
+            - copy_dag_utils:
+                root_directory: << parameters.checkout_directory >>
+            - copy_airflow_variables:
+                airflow_variables_files: << parameters.airflow_variables_files >>
+                root_directory: << parameters.checkout_directory >>
+            - sync_to_airflow_bucket:
+                airflow_bucket: << parameters.airflow_bucket >>
+                root_directory: << parameters.checkout_directory >>
+            - import_airflow_variables:
+                cloud_composer_name: << parameters.cloud_composer_name >>
+                google_project_id: << parameters.google_project_id >>
+                google_region: << parameters.google_region >>
+            - create_airflow_postgres_db_connection:
+                cloud_composer_name: << parameters.cloud_composer_name >>
+                google_project_id: << parameters.google_project_id >>
+                google_region: << parameters.google_region >>
+                root_directory: << parameters.checkout_directory >>
+            - slack_notification_build_fail
+        working_directory: << parameters.checkout_directory >>
+    deploy_image_to_cloudrun:
+        description: |
+            Deploy an image in Artifact Registry to Cloud Run.
+
+            This job assumes you have created the following environment variables in a CircleCI context:
+
+            For authenticating to GCP (these names are configurable in the parameters below):
+
+            - GCP_PROJECT_ID - the name of the project in GCP.
+            - GCP_PROJECT_NUMBER - project number ID.
+            - GCP_SERVICE_ACCOUNT_EMAIL - the service account to use.
+            - GCP_WIP_ID - the Workload Identity Pool ID.
+            - GCP_WIP_PROVIDER_ID - the Workload Identity Pool Provider ID.
+
+            For deplying to Cloud Run:
+
+            - GCP_REGION - the region in GCP.
+        docker:
+            - image: google/cloud-sdk:<< parameters.gcp_sdk_version >>
+        parameters:
+            allow_unauthenticated:
+                default: ""
+                description: |
+                    Allow unauthenticated requests to the Cloud Run endpoint.
+
+                    This optional parameter takes "true" as a string. Omit this parameter or pass the empty string to to deny unauthenticated requests.
+                type: string
+            checkout_directory:
+                default: /root/kraken
+                description: The local directory to checkout the repository to.
+                type: string
+            cloud_run_cloud_sql_instances:
+                default: ""
+                description: The name of a Cloud SQL instance to connect to. This requires a VPC connector in the same network as the Cloud SQL instance to connect.
+                type: string
+            cloud_run_concurrency:
+                default: ""
+                description: The number of concurrent requests to server. E.g "1"
+                type: string
+            cloud_run_cpu:
+                default: ""
+                description: The cpu value to use. E.g "1"
+                type: string
+            cloud_run_env_vars:
+                default: ""
+                description: |
+                    Environment variables to use for the deployed Cloud Run instance.
+
+                    This value is passed to the `--set-env-vars` flag.
+
+                    See the Cloud Run documentation for the string to pass to this flag (https://cloud.google.com/run/docs/configuring/environment-variables#command-line).
+                type: string
+            cloud_run_max_instances:
+                default: ""
+                description: The maximum number of instances for Cloud Run.
+                type: string
+            cloud_run_memory:
+                default: ""
+                description: The memory value to use. E.g "512Mi"
+                type: string
+            cloud_run_min_instances:
+                default: ""
+                description: The minimum number of instances for Cloud Run.
+                type: string
+            cloud_run_name:
+                description: The name of the Cloud Run deployment to use.
+                type: string
+            cloud_run_service_account:
+                default: ""
+                description: The service account to use for Cloud Run.
+                type: string
+            cloud_run_vpc_connector:
+                default: ""
+                description: The name of a VPC connector to use for Cloud Run.
+                type: string
+            gcp_cred_config_file_path:
+                default: .circleci/gcp_cred_config.json
+                description: The path where the credentials config path should be saved to.
+                type: string
+            gcp_sdk_version:
+                default: 437.0.0
+                description: The version to use for the GCP SDK.
+                type: string
+            google_project_id:
+                default: GCP_PROJECT_ID
+                description: The name of the environment variable containing the name of the project in GCP.
+                type: string
+            google_project_number:
+                default: GCP_PROJECT_NUMBER
+                description: The name of the environment variable containing the project number ID.
+                type: string
+            google_region:
+                default: GCP_REGION
+                description: The name of the environment variable containing the region in GCP.
+                type: string
+            image_name:
+                description: The name of the image to deploy in Artifact Registry.
+                type: string
+            service_account_email:
+                default: GCP_SERVICE_ACCOUNT_EMAIL
+                description: The name of the environment variable containing the service account to use.
+                type: string
+            workload_identity_pool_id:
+                default: GCP_WIP_ID
+                description: The name of the environment variable containing the Workload Identity Pool ID.
+                type: string
+            workload_identity_pool_provider_id:
+                default: GCP_WIP_PROVIDER_ID
+                description: The name of the environment variable containing the Workload Identity Pool Provider ID.
+                type: string
+        resource_class: small
+        steps:
+            - checkout:
+                path: << parameters.checkout_directory >>
+            - checkout_submodules
+            - gcp_auth_oidc:
+                gcp_cred_config_file_path: << parameters.gcp_cred_config_file_path >>
+                gcp_sdk_version: << parameters.gcp_sdk_version >>
+                google_project_id: << parameters.google_project_id >>
+                google_project_number: << parameters.google_project_number >>
+                service_account_email: << parameters.service_account_email >>
+                workload_identity_pool_id: << parameters.workload_identity_pool_id >>
+                workload_identity_pool_provider_id: << parameters.workload_identity_pool_provider_id >>
+            - deploy_to_cloudrun:
+                allow_unauthenticated: << parameters.allow_unauthenticated >>
+                cloud_run_cloud_sql_instances: << parameters.cloud_run_cloud_sql_instances >>
+                cloud_run_concurrency: << parameters.cloud_run_concurrency >>
+                cloud_run_cpu: << parameters.cloud_run_cpu >>
+                cloud_run_env_vars: << parameters.cloud_run_env_vars >>
+                cloud_run_max_instances: << parameters.cloud_run_max_instances >>
+                cloud_run_memory: << parameters.cloud_run_memory >>
+                cloud_run_min_instances: << parameters.cloud_run_min_instances >>
+                cloud_run_name: << parameters.cloud_run_name >>
+                cloud_run_service_account: << parameters.cloud_run_service_account >>
+                cloud_run_vpc_connector: << parameters.cloud_run_vpc_connector >>
+                google_project_id: << parameters.google_project_id >>
+                google_region: << parameters.google_region >>
+                image_name: << parameters.image_name >>
+            - slack_notification_build_fail
+        working_directory: << parameters.checkout_directory >>
+    deploy_terraform:
+        description: |
+            Plan & Apply Terraform in GCP.
+        executor:
+            name: gcp-cli/default
+        parameters:
+            checkout_directory:
+                default: /root/kraken
+                description: The local directory to checkout the repository to.
+                type: string
+            gcp_cred_config_file_path:
+                default: .circleci/gcp_cred_config.json
+                description: The path where the credentials config path should be saved to.
+                type: string
+            gcp_sdk_version:
+                default: 437.0.0
+                description: The version to use for the GCP SDK.
+                type: string
+            google_project_id:
+                default: GCP_PROJECT_ID
+                description: The name of the environment variable containing the name of the project in GCP.
+                type: string
+            google_project_number:
+                default: GCP_PROJECT_NUMBER
+                description: The name of the environment variable containing the project number ID.
+                type: string
+            service_account_email:
+                default: GCP_SERVICE_ACCOUNT_EMAIL
+                description: The name of the environment variable containing the service account to use.
+                type: string
+            terraform_directory:
+                default: /root/kraken/terraform
+                description: The local directory inside the repository containing Terraform to plan & apply.
+                type: string
+            terraform_version:
+                description: The version of Terraform to use.
+                type: string
+            workload_identity_pool_id:
+                default: GCP_WIP_ID
+                description: The name of the environment variable containing the Workload Identity Pool ID.
+                type: string
+            workload_identity_pool_provider_id:
+                default: GCP_WIP_PROVIDER_ID
+                description: The name of the environment variable containing the Workload Identity Pool Provider ID.
+                type: string
+            workspace:
+                description: The Terraform workspace name to use.
+                type: string
+        resource_class: small
+        steps:
+            - checkout:
+                path: << parameters.checkout_directory >>
+            - checkout_submodules
+            - gcp_auth_oidc:
+                gcp_cred_config_file_path: << parameters.checkout_directory >>/<< parameters.gcp_cred_config_file_path >>
+                gcp_sdk_version: << parameters.gcp_sdk_version >>
+                google_project_id: << parameters.google_project_id >>
+                google_project_number: << parameters.google_project_number >>
+                service_account_email: << parameters.service_account_email >>
+                workload_identity_pool_id: << parameters.workload_identity_pool_id >>
+                workload_identity_pool_provider_id: << parameters.workload_identity_pool_provider_id >>
+            - terraform/install:
+                terraform_version: << parameters.terraform_version >>
+            - plan_apply_terraform:
+                path: << parameters.terraform_directory >>
+                workspace: << parameters.workspace >>
+            - slack_notification_build_fail
+        working_directory: << parameters.checkout_directory >>
+    deploy_terraform_with_gke:
+        description: |
+            Plan & Apply Terraform in GCP authenticating to GKE.
+        executor:
+            name: gcp-cli/default
+        parameters:
+            checkout_directory:
+                default: /root/kraken
+                description: The local directory to checkout the repository to.
+                type: string
+            gcp_cred_config_file_path:
+                default: .circleci/gcp_cred_config.json
+                description: The path where the credentials config path should be saved to.
+                type: string
+            gcp_sdk_version:
+                default: 437.0.0
+                description: The version to use for the GCP SDK.
+                type: string
+            gke_cluster_name:
+                description: The name of the cluster in GKE.
+                type: string
+            google_project_id:
+                default: GCP_PROJECT_ID
+                description: The name of the environment variable containing the name of the project in GCP.
+                type: string
+            google_project_number:
+                default: GCP_PROJECT_NUMBER
+                description: The name of the environment variable containing the project number ID.
+                type: string
+            google_region:
+                default: GCP_REGION
+                description: The name of the environment variable containing the region in GCP.
+                type: string
+            kubectl_port_forward_command:
+                default: ""
+                description: Kubectl command to port-forward a K8s resource locally.
+                type: string
+            service_account_email:
+                default: GCP_SERVICE_ACCOUNT_EMAIL
+                description: The name of the environment variable containing the service account to use.
+                type: string
+            sops_version:
+                default: v3.7.3
+                description: The version of sops to install. <https://github.com/mozilla/sops>
+                type: string
+            terraform_directory:
+                default: /root/kraken/terraform
+                description: The local directory inside the repository containing Terraform to plan & apply.
+                type: string
+            terraform_version:
+                description: The version of Terraform to use.
+                type: string
+            with_sudo:
+                default: false
+                description: Use sudo when installing dependencies.
+                type: boolean
+            workload_identity_pool_id:
+                default: GCP_WIP_ID
+                description: The name of the environment variable containing the Workload Identity Pool ID.
+                type: string
+            workload_identity_pool_provider_id:
+                default: GCP_WIP_PROVIDER_ID
+                description: The name of the environment variable containing the Workload Identity Pool Provider ID.
+                type: string
+            workspace:
+                description: The Terraform workspace name to use.
+                type: string
+        resource_class: small
+        steps:
+            - checkout:
+                path: << parameters.checkout_directory >>
+            - checkout_submodules
+            - gcp_auth_oidc:
+                gcp_cred_config_file_path: << parameters.checkout_directory >>/<< parameters.gcp_cred_config_file_path >>
+                gcp_sdk_version: << parameters.gcp_sdk_version >>
+                google_project_id: << parameters.google_project_id >>
+                google_project_number: << parameters.google_project_number >>
+                service_account_email: << parameters.service_account_email >>
+                workload_identity_pool_id: << parameters.workload_identity_pool_id >>
+                workload_identity_pool_provider_id: << parameters.workload_identity_pool_provider_id >>
+            - install_kubectl
+            - install_sops:
+                sops_version: << parameters.sops_version >>
+                with_sudo: << parameters.with_sudo >>
+            - authenticate_with_gke:
+                gke_cluster_name: << parameters.gke_cluster_name >>
+                google_project_id: << parameters.google_project_id >>
+                google_region: << parameters.google_region >>
+            - run:
+                background: true
+                command: |
+                    if [ -n "${ORB_KUBECTL_PORT_FORWARD_COMMAND}" ]; then
+                      while true; do
+                        sleep 5
+                        eval "$ORB_KUBECTL_PORT_FORWARD_COMMAND"
+                      done
+                    else
+                      echo "no port-forward command to run - skipping"
+                    fi
+                environment:
+                    ORB_KUBECTL_PORT_FORWARD_COMMAND: << parameters.kubectl_port_forward_command >>
+                name: Port-forward using Kubectl
+            - run:
+                command: sleep 10
+                name: Wait for port-forward to stabilize - sleep 10s
+            - terraform/install:
+                terraform_version: << parameters.terraform_version >>
+            - plan_apply_terraform:
+                path: << parameters.terraform_directory >>
+                workspace: << parameters.workspace >>
+            - slack_notification_build_fail
+        working_directory: << parameters.checkout_directory >>
+    helm_deploy_to_cluster:
+        description: |
+            Deploy a helm chart to GKE.
+        executor:
+            name: gcp-cli/default
+        parameters:
+            checkout_directory:
+                default: /root/kraken
+                description: The local directory to checkout the repository to.
+                type: string
+            cluster_namespace:
+                default: default
+                description: Cluster namespace to deploy the helm chart to
+                type: string
+            extra_args:
+                default: ""
+                description: Extra arguments to pass to helm.
+                type: string
+            gcp_cred_config_file_path:
+                default: .circleci/gcp_cred_config.json
+                description: The path where the credentials config path should be saved to.
+                type: string
+            gcp_sdk_version:
+                default: 437.0.0
+                description: The version to use for the GCP SDK.
+                type: string
+            gke_cluster_name:
+                default: data-applications-gke-dev
+                description: Which GKE cluster to deploy to.
+                type: string
+            google_project_id:
+                default: GCP_PROJECT_ID
+                description: The name of the environment variable containing the name of the project in GCP.
+                type: string
+            google_project_number:
+                default: GCP_PROJECT_NUMBER
+                description: The name of the environment variable containing the project number ID.
+                type: string
+            google_region:
+                default: GCP_REGION
+                description: The GCP region.
+                type: string
+            helm_chart:
+                description: helm chart name
+                type: string
+            helm_directory:
+                default: /root/kraken/kubernetes
+                description: The local directory inside the repository containing helm chart.
+                type: string
+            helm_release:
+                description: helm release name
+                type: string
+            path_to_helm_charts:
+                default: kubernetes/helm
+                description: path from base to the helm chart
+                type: string
+            service_account_email:
+                default: GCP_SERVICE_ACCOUNT_EMAIL
+                description: The name of the environment variable containing the service account to use.
+                type: string
+            workload_identity_pool_id:
+                default: GCP_WIP_ID
+                description: The name of the environment variable containing the Workload Identity Pool ID.
+                type: string
+            workload_identity_pool_provider_id:
+                default: GCP_WIP_PROVIDER_ID
+                description: The name of the environment variable containing the Workload Identity Pool Provider ID.
+                type: string
+        resource_class: small
+        steps:
+            - checkout:
+                path: << parameters.checkout_directory >>
+            - gcp_auth_oidc:
+                gcp_cred_config_file_path: << parameters.checkout_directory >>/<< parameters.gcp_cred_config_file_path >>
+                gcp_sdk_version: << parameters.gcp_sdk_version >>
+                google_project_id: << parameters.google_project_id >>
+                google_project_number: << parameters.google_project_number >>
+                service_account_email: << parameters.service_account_email >>
+                workload_identity_pool_id: << parameters.workload_identity_pool_id >>
+                workload_identity_pool_provider_id: << parameters.workload_identity_pool_provider_id >>
+            - run:
+                command: gcloud components install gke-gcloud-auth-plugin
+                name: auth
+            - authenticate_with_gke:
+                gke_cluster_name: << parameters.gke_cluster_name >>
+                google_project_id: << parameters.google_project_id >>
+                google_region: << parameters.google_region >>
+            - helm/install-helm-client
+            - run:
+                command: cd <<parameters.path_to_helm_charts>>; helm upgrade -i << parameters.helm_release >> << parameters.helm_chart >> -n << parameters.cluster_namespace >> << parameters.extra_args >>
+                name: upgrade helm
+        working_directory: << parameters.checkout_directory >>
+    slack_notification_build_start:
+        description: |
+            Send a notification to #data-team-circleci-builds in Slack on build start.
+        docker:
+            - image: cimg/base:stable
+        resource_class: small
+        steps:
+            - slack/notify:
+                custom: |
+                    {
+                      "blocks": [
+                        {
+                          "type": "header",
+                          "text": {
+                            "type": "plain_text",
+                            "emoji": true,
+                            "text": "CircleCI - Workflow initiated :rocket_animated:"
+                          }
+                        },
+                        {
+                          "type": "divider"
+                        },
+                        {
+                          "type": "section",
+                          "fields": [
+                            {
+                              "type": "mrkdwn",
+                              "text": "*Repo:*\n$CIRCLE_PROJECT_REPONAME"
+                            },
+                            {
+                              "type": "mrkdwn",
+                              "text": "*Branch:*\n$CIRCLE_BRANCH"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "section",
+                          "text": {
+                            "type": "mrkdwn",
+                            "text": "*URL:* <$CIRCLE_BUILD_URL>"
+                          }
+                        },
+                        {
+                          "type": "context",
+                          "elements": [
+                            {
+                              "type": "mrkdwn",
+                              "text": ":saluting_face_animated: by $CIRCLE_USERNAME"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                event: always
+examples:
+    example:
+        description: |
+            Sample example description.
+        usage:
+            version: "2.1"
+            orbs:
+                <orb-name>: <namespace>/<orb-name>@1.2.3
+            workflows:
+                use-my-orb:
+                    jobs:
+                        - <orb-name>/<job-name>
+    gcp_auth_oidc:
+        description: |
+            Authenticate to GCP using OIDC/Workload Identity.
+        usage:
+            version: "2.1"
+            orbs:
+                data-applications: agent-software/data-applications-team-ops-orb@volatile
+            jobs:
+                authenticate_with_gcp:
+                    executor:
+                        name: gcp-cli/default
+                    resource_class: small
+                    steps:
+                        - gcp_auth_oidc:
+                            gcp_cred_config_file_path: .circleci/gcp_cred_config.json
+                            google_project_id: GCP_PROJECT_ID
+                            google_project_number: GCP_PROJECT_NUMBER
+                            service_account_email: GCP_SERVICE_ACCOUNT_EMAIL
+                            workload_identity_pool_id: GCP_WIP_ID
+                            workload_identity_pool_provider_id: GCP_WIP_PROVIDER_ID
+            workflows: null
+
