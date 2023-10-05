@@ -11,6 +11,7 @@ parameters:
   gcp_sdk_version:
       default: 437.0.0
       description: The version to use for the GCP SDK.
+      type: string
 
 jobs:
   build-and-test:
