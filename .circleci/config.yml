@@ -127,6 +127,6 @@ workflows:
       - build-and-test
       - deploy-terraform-main:
           context: decoder
-      - rebuild-decoder-container:
+      - rebuild-decoder-container
 #          requires:
 #            - deploy-terraform-main
