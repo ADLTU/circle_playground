@@ -143,6 +143,6 @@ workflows:
       - deploy-terraform-main:
           context:
             - decoder
-#      - rebuild-decoder-container:
-#          requires:
-#            - deploy-terraform-main
+      - rebuild-decoder-container:
+          requires:
+            - deploy-terraform-main
