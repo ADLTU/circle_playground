@@ -86,40 +86,50 @@ orbs:
   gcp-cli: circleci/gcp-cli@3.1.0
   build-tools: circleci/build-tools@3.0.0
 
-jobs:
-  deploy-terraform-main:
-    executor:
-      name: gcp-cli/default
-    steps:
-      - checkout
-      - gcp-cli/setup:
-          use_oidc: true
-          google_project_id: GCP_PROJECT_ID
-          google_project_number: GCP_PROJECT_NUMBER
-          service_account_email: GCP_SERVICE_ACCOUNT_EMAIL
-          workload_identity_pool_id: GCP_WIP_ID
-          workload_identity_pool_provider_id: GCP_WIP_PROVIDER_ID
+docker:
+  - image: google/cloud-sdk:437.0.0
 
-      - run:
-          name: Check Active Account
-          command: gcloud auth list
-
-  rebuild-decoder-container:
-    docker:
-      - image: google/cloud-sdk:437.0.0
-
-    steps:
-      - run:
-          name: Check Active Account
-          command: gcloud auth list
-workflows:
-  build:
-    jobs:
-      - deploy-terraform-main:
-          context:
-            - decoder
-      - rebuild-decoder-container:
-          requires:
-            - deploy-terraform-main
-          context:
-            - decoder
+steps:
+  - checkout
+  - gcp-cli/setup:
+      use_oidc: true
+      google_project_id: GCP_PROJECT_ID
+      google_project_number: GCP_PROJECT_NUMBER
+      service_account_email: GCP_SERVICE_ACCOUNT_EMAIL
+      workload_identity_pool_id: GCP_WIP_ID
+      workload_identity_pool_provider_id: GCP_WIP_PROVIDER_ID
+  - run:
+      name: Check Active Account
+      command: gcloud auth list
+      
+#jobs:
+#  deploy-terraform-main:
+#    executor:
+#      name: gcp-cli/default
+#    steps:
+#      - checkout
+#
+#
+#      - run:
+#          name: Check Active Account
+#          command: gcloud auth list
+#
+#  rebuild-decoder-container:
+#
+#
+#    steps:
+#      - run:
+#          name: Check Active Account
+#          command: gcloud auth list
+#
+#workflows:
+#  build:
+#    jobs:
+#      - deploy-terraform-main:
+#          context:
+#            - decoder
+#      - rebuild-decoder-container:
+#          requires:
+#            - deploy-terraform-main
+#          context:
+#            - decoder
