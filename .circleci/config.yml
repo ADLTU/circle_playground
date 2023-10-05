@@ -1,17 +1,149 @@
+#version: 2.1
+#
+#orbs:
+#  python: circleci/python@1.5.0
+#  terraform: circleci/terraform@3.2.0
+#  gcp-cli: circleci/gcp-cli@3.1.0
+#  build-tools: circleci/build-tools@3.0.0  # optional - needed if CURL isn't in the executor you are using
+#
+#jobs:
+#  build-and-test:
+#    docker:
+#      - image: cimg/python:3.11.5
+#    steps:
+#      - checkout
+#      - python/install-packages:
+#          pkg-manager: poetry
+#      - run:
+#          name: Run tests
+#          command: poetry run pytest
+#
+#  deploy-terraform-main:
+#    executor:
+#      name: gcp-cli/default
+#    steps:
+#      - checkout
+#      - gcp-cli/setup:
+#          use_oidc: true
+#          google_project_id: GCP_PROJECT_ID
+#          google_project_number: GCP_PROJECT_NUMBER
+#          service_account_email: GCP_SERVICE_ACCOUNT_EMAIL
+#          workload_identity_pool_id: GCP_WIP_ID
+#          workload_identity_pool_provider_id: GCP_WIP_PROVIDER_ID
+#
+#      - run:
+#          name: Check Active Account
+#          command: gcloud auth list
+#
+#  rebuild-decoder-container:
+#    docker:
+#      - image: google/cloud-sdk:<< parameters.gcp_sdk_version >>
+#    parameters:
+#      google_region:
+#        default: europe-west2
+#        description: The name of the environment variable containing the region in GCP.
+#        type: string
+#      gcp_sdk_version:
+#        default: 437.0.0
+#        description: The version to use for the GCP SDK.
+#        type: string
+#    steps:
+#      - run:
+#          name: Check Active Account
+#          command: gcloud auth list
+##      - checkout
+##      - run:
+##          name: Print Parameters
+##          command: |
+##            echo Authenticating Docker with Artifact Registry for << parameters.google_region >>-docker.pkg.dev
+##            echo GCP SDK Version: << parameters.gcp_sdk_version >>
+##
+##      - run:
+##          name: Authenticate Docker with Artifact Registry
+##          command: gcloud auth configure-docker << parameters.google_region >>-docker.pkg.dev
+##
+##      - run:
+##          name: Submit new build
+##          command: gcloud builds submit --project=kraken-v2-dev --config /root/project/cloudbuild_valuator.yaml --substitutions="_PROJECT=kraken-v2-dev"
+#
+#workflows:
+#  build:
+#    jobs:
+#      - build-and-test
+#      - deploy-terraform-main:
+#          context:
+#            - decoder
+#      - rebuild-decoder-container:
+#          requires:
+#            - deploy-terraform-main
+
+
 version: 2.1
+
+orbs:
+  python: circleci/python@1.5.0
+  terraform: circleci/terraform@3.2.0
+  gcp-cli: circleci/gcp-cli@3.1.0
+  build-tools: circleci/build-tools@3.0.0
 
 docker:
   - image: google/cloud-sdk:437.0.0
 
 jobs:
+  build-and-test:
+    docker:
+      - image: cimg/python:3.11.5
+    steps:
+      - checkout
+      - python/install-packages:
+          pkg-manager: poetry
+      - run:
+          name: Run tests
+          command: poetry run pytest
+
+  deploy-terraform-main:
+    executor:
+      name: gcp-cli/default
+    steps:
+      - checkout
+      - gcp-cli/setup:
+          use_oidc: true
+          google_project_id: GCP_PROJECT_ID
+          google_project_number: GCP_PROJECT_NUMBER
+          service_account_email: GCP_SERVICE_ACCOUNT_EMAIL
+          workload_identity_pool_id: GCP_WIP_ID
+          workload_identity_pool_provider_id: GCP_WIP_PROVIDER_ID
+
+      - run:
+          name: Check Active Account
+          command: gcloud auth list
+
   rebuild-decoder-container:
+    docker:
+      - image: google/cloud-sdk:437.0.0
     steps:
       - checkout
       - run:
           name: Check Active Account
           command: gcloud auth list
 
+#
+##    executor:
+##      name: gcp-cli/default
+#    steps:
+#      - checkout
+#
+#      - run:
+#          name: Check Active Account
+#          command: gcloud auth list
+
 workflows:
   build:
     jobs:
+      - build-and-test
+      - deploy-terraform-main:
+          context:
+            - decoder
       - rebuild-decoder-container:
+          requires:
+            - deploy-terraform-main
