@@ -31,6 +31,10 @@ jobs:
           workload_identity_pool_id: GCP_WIP_ID
           workload_identity_pool_provider_id: GCP_WIP_PROVIDER_ID
 
+      - run:
+          name: Check Active Account
+          command: gcloud auth list
+
   rebuild-decoder-container:
     docker:
       - image: google/cloud-sdk:<< parameters.gcp_sdk_version >>
