@@ -108,15 +108,18 @@ commands:
 
 executor: gcp-cli/default
 
-workflows:
-  build:
-    jobs:
-      go-for-it:
-        docker:
-          - image: google/cloud-sdk:437.0.0
-        resource_class: small
-        steps:
-          - checkout
-          - authenticate:
-              context: decoder
-          - rebuild-decoder-container
+jobs:
+  go-for-it:
+    docker:
+      - image: google/cloud-sdk:437.0.0
+    resource_class: small
+    steps:
+      - checkout
+      - authenticate:
+          context: decoder
+      - rebuild-decoder-container
+
+#
+#workflows:
+#  build:
+#    jobs:
