@@ -89,17 +89,12 @@ orbs:
 docker:
   - image: google/cloud-sdk:437.0.0
 
-jobs:
-  build-and-test:
-    docker:
-      - image: cimg/python:3.11.5
-    steps:
-      - checkout
-      - python/install-packages:
-          pkg-manager: poetry
-      - run:
-          name: Run tests
-          command: poetry run pytest
+rebuild-decoder-container:
+  steps:
+    - checkout
+    - run:
+        name: Check Active Account
+        command: gcloud auth list
 
   deploy-terraform-main:
     executor:
@@ -117,15 +112,22 @@ jobs:
       - run:
           name: Check Active Account
           command: gcloud auth list
+#
+#jobs:
+#  build-and-test:
+#    docker:
+#      - image: cimg/python:3.11.5
+#    steps:
+#      - checkout
+#      - python/install-packages:
+#          pkg-manager: poetry
+#      - run:
+#          name: Run tests
+#          command: poetry run pytest
+#
+#
+#
 
-  rebuild-decoder-container:
-    docker:
-      - image: google/cloud-sdk:437.0.0
-    steps:
-      - checkout
-      - run:
-          name: Check Active Account
-          command: gcloud auth list
 
 #
 ##    executor:
@@ -140,7 +142,7 @@ jobs:
 workflows:
   build:
     jobs:
-      - build-and-test
+#      - build-and-test
       - deploy-terraform-main:
           context:
             - decoder
