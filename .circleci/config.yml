@@ -90,6 +90,17 @@ docker:
   - image: google/cloud-sdk:437.0.0
 
 jobs:
+  build-and-test:
+    docker:
+      - image: cimg/python:3.11.5
+    steps:
+      - checkout
+      - python/install-packages:
+          pkg-manager: poetry
+      - run:
+          name: Run tests
+          command: poetry run pytest
+
   deploy-terraform-main:
     executor:
       name: gcp-cli/default
@@ -111,37 +122,10 @@ jobs:
 workflows:
   build:
     jobs:
+      - build-and-test
       - deploy-terraform-main:
           context:
             - decoder
-#
-#  deploy-terraform-main:
-#    executor:
-#      name: gcp-cli/default
-#    steps:
-#      - checkout
-#
-#
-#      - run:
-#          name: Check Active Account
-#          command: gcloud auth list
-#
-#  rebuild-decoder-container:
-#
-#
-#    steps:
-#      - run:
-#          name: Check Active Account
-#          command: gcloud auth list
-#
-#workflows:
-#  build:
-#    jobs:
-#      - deploy-terraform-main:
-#          context:
-#            - decoder
 #      - rebuild-decoder-container:
 #          requires:
 #            - deploy-terraform-main
-#          context:
-#            - decoder
