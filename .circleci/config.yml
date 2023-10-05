@@ -36,6 +36,10 @@ jobs:
           command: gcloud auth list
 
       - run:
+          command: gcloud auth configure-docker europe-west2-docker.pkg.dev
+          name: Authenticate Docker with Artifact Registry
+
+      - run:
           name: Submit new build
           command: gcloud builds submit --project=kraken-v2-dev --config /root/project/cloudbuild_valuator.yaml --substitutions="_PROJECT=kraken-v2-dev"
 
