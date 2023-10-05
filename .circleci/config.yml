@@ -106,7 +106,7 @@ jobs:
 
   rebuild-decoder-container:
     docker:
-      - image: google/cloud-sdk:<< parameters.gcp_sdk_version >>
+      - image: google/cloud-sdk:437.0.0
 
     steps:
       - run:
