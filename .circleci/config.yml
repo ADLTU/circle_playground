@@ -120,6 +120,7 @@ jobs:
 
   rebuild-decoder-container:
     steps:
+      - checkout
       - run:
           name: Check Active Account
           command: gcloud auth list
