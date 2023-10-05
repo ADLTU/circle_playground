@@ -1,161 +1,174 @@
+description: >
+  Build a Docker image using GCP Cloud Build and push to Artifact Registry.
+
+
+  This job assumes you have created the following environment variables in a
+  CircleCI context:
+
+
+  For authenticating to GCP (these names are configurable in the parameters
+  below):
+
+
+  - GCP_PROJECT_ID - the name of the project in GCP.
+
+  - GCP_PROJECT_NUMBER - project number ID.
+
+  - GCP_SERVICE_ACCOUNT_EMAIL - the service account to use.
+
+  - GCP_WIP_ID - the Workload Identity Pool ID.
+
+  - GCP_WIP_PROVIDER_ID - the Workload Identity Pool Provider ID.
+
+
+  For building & pushing to Artifact Registry:
+
+
+  - GCP_REGION - the region in GCP.
+docker:
+  - image: google/cloud-sdk:<< parameters.gcp_sdk_version >>
+parameters:
+  artifact_repository:
+    description: The name of the repository in Artifact Registry.
+    type: string
+  attach_workspace:
+    default: false
+    description: Attach a CircleCI workspace.
+    type: boolean
+  build_timeout:
+    default: 45m
+    description: >-
+      The timeout value to use if no output is detected from Cloudbuild after
+      this time.
+    type: string
+  checkout_directory:
+    default: /root/kraken
+    description: The local directory to checkout the repository to.
+    type: string
+  cloudbuild_yaml_filename:
+    description: >-
+      The filename of the cloudbuild.yml inside the `path_to_cloudbuild_yaml`
+      directory.
+    type: string
+  context_dir:
+    description: >
+      The directory to use as the root context when building the Dockerfile.
+
+
+      In most cases this will be the same directory where the cloudbuild.yml is
+      located.
+
+
+      If your build requires files in parent directories relative to the
+      Dockerfile, you can specify which directory should be used.
+
+
+      Your cloudbuild.yml and Dockerfile must reference files/paths relative to
+      this context dir.
+    type: string
+  gcp_cred_config_file_path:
+    default: .circleci/gcp_cred_config.json
+    description: The path where the credentials config path should be saved to.
+    type: string
+  gcp_sdk_version:
+    default: 437.0.0
+    description: The version to use for the GCP SDK.
+    type: string
+  google_project_id:
+    default: GCP_PROJECT_ID
+    description: >-
+      The name of the environment variable containing the name of the project in
+      GCP.
+    type: string
+  google_project_number:
+    default: GCP_PROJECT_NUMBER
+    description: The name of the environment variable containing the project number ID.
+    type: string
+  google_region:
+    default: GCP_REGION
+    description: The name of the environment variable containing the region in GCP.
+    type: string
+  image_name:
+    description: The name of the image to build.
+    type: string
+  path_to_cloudbuild_yaml:
+    description: >-
+      The path to the directory inside the repository containing the
+      cloudbuild.yml.
+    type: string
+  remove_untagged:
+    default: true
+    description: >
+      If `true` will remove any untagged images after the new image has been
+      built.
+
+
+      This allows building an image to a `latest` tag and removing the old
+      untagged image when a new image has been built.
+    type: boolean
+  service_account_email:
+    default: GCP_SERVICE_ACCOUNT_EMAIL
+    description: >-
+      The name of the environment variable containing the service account to
+      use.
+    type: string
+  substitutions:
+    default: ''
+    description: Any substitutions to use when building the image with Cloudbuild.
+    type: string
+  use_kaniko:
+    default: true
+    description: >-
+      If `true` use the Kaniko builder in Cloudbuild. This provides cached
+      layers for quicker repeatable builds.
+    type: boolean
+  workload_identity_pool_id:
+    default: GCP_WIP_ID
+    description: >-
+      The name of the environment variable containing the Workload Identity Pool
+      ID.
+    type: string
+  workload_identity_pool_provider_id:
+    default: GCP_WIP_PROVIDER_ID
+    description: >-
+      The name of the environment variable containing the Workload Identity Pool
+      Provider ID.
+    type: string
+  workspace_directory:
+    default: ''
+    description: The full directory path where to attach the workspace.
+    type: string
+resource_class: small
 steps:
-  - run:
-      command: gcloud auth configure-docker "${!ORB_GOOGLE_REGION}-docker.pkg.dev"
-      environment:
-        ORB_GOOGLE_REGION: << parameters.google_region >>
-      name: Authenticate Docker with Artifact Registry
+  - checkout:
+      path: << parameters.checkout_directory >>
+  - checkout_submodules
   - when:
       condition:
         equal:
           - true
-          - << parameters.use_kaniko >>
+          - << parameters.attach_workspace >>
       steps:
-        - run:
-            command: gcloud config set builds/use_kaniko True
-            name: Use Kaniko Build
-  - run:
-      command: >
-        #!/bin/bash
-
-
-        if [ -n "${!ORB_GOOGLE_PROJECT_ID}" ]; then
-            set -- "$@" --project="${!ORB_GOOGLE_PROJECT_ID}"
-        fi
-
-
-        if [ -n "${!ORB_GOOGLE_REGION}" ]; then
-            set -- "$@" --region="${!ORB_GOOGLE_REGION}"
-        fi
-
-
-        if [ -n "${PATH_TO_CLOUDBUILD_YAML}" ] && [ -n
-        "${CLOUDBUILD_YAML_FILENAME}" ]; then
-            set -- "$@" --config="${PATH_TO_CLOUDBUILD_YAML}/${CLOUDBUILD_YAML_FILENAME}"
-        fi
-
-
-        if [ -n "${SUBSTITUTIONS}" ]; then
-            set -- "$@" --substitutions="${SUBSTITUTIONS}"
-        fi
-
-
-        gcloud builds submit "$@" "${CONTEXT_DIR}"
-      environment:
-        CLOUDBUILD_YAML_FILENAME: << parameters.cloudbuild_yaml_filename >>
-        CONTEXT_DIR: << parameters.context_dir >>
-        ORB_GOOGLE_PROJECT_ID: << parameters.google_project_id >>
-        ORB_GOOGLE_REGION: << parameters.google_region >>
-        PATH_TO_CLOUDBUILD_YAML: << parameters.path_to_cloudbuild_yaml >>
-        SUBSTITUTIONS: << parameters.substitutions >>
-      name: Build Dockerfile using Cloud Build
-      no_output_timeout: << parameters.build_timeout >>
-  - when:
-      condition:
-        equal:
-          - true
-          - << parameters.remove_untagged >>
-      steps:
-        - run:
-            command: >
-              #!/bin/bash
-
-
-              cat \<< EOF > "$ROOT_DIRECTORY/cleanup_docker_images.py"
-
-              """
-
-              Script which gets all tags for an image in Artifact Registry and
-              removes all untagged.
-
-
-              Takes arguments --artifact_registry_repository,
-              --artifact_registry_package
-
-
-              Example:
-
-              \`\`\`
-
-              python artifact_registry_delete.py \
-                  --artifact_registry_repository europe-west2-docker.pkg.dev/kraken-dev-298113/great-expectations \
-                  --artifact_registry_package europe-west2-docker.pkg.dev/kraken-dev-298113/great-expectations/great-expectations-run-checkpoint
-              \`\`\`
-
-              """
-
-
-              import argparse
-
-              import json
-
-              import subprocess
-
-
-
-              def main(argv=None):
-                  parser = argparse.ArgumentParser()
-                  parser.add_argument("--artifact_registry_repository", dest="artifact_registry_repository", required=True, type=str)
-                  parser.add_argument("--artifact_registry_package", dest="artifact_registry_package", required=True, type=str)
-                  known_args, _ = parser.parse_known_args(argv)
-
-                  # list all images
-                  gcloud_output = subprocess.run(
-                      [
-                          "gcloud",
-                          "artifacts",
-                          "docker",
-                          "images",
-                          "list",
-                          "--include-tags",
-                          known_args.artifact_registry_repository,
-                          "--format",
-                          "json",
-                      ],
-                      shell=False,
-                      text=True,
-                      check=True,
-                      capture_output=True,
-                  )
-
-                  # filter for registry packages that are untagged
-                  images_to_delete = [
-                      {"package": item["package"], "tags": item["tags"], "version": item["version"]}
-                      for item in json.loads(gcloud_output.stdout)
-                      if item["package"] == known_args.artifact_registry_package
-                      if item["tags"] == ""
-                  ]
-
-                  # if no untagged images exit
-                  if not images_to_delete:
-                      print(f"no images to delete for package {known_args.artifact_registry_package}")
-                      raise SystemExit(0)
-
-                  # if untagged images remove them
-                  print(f"found {len(images_to_delete)} untagged images for package {known_args.artifact_registry_package}")
-                  for image in images_to_delete:
-                      gcloud_image = f"{image['package']}@{image['version']}"
-                      gcloud_output = subprocess.run(
-                          ["gcloud", "artifacts", "docker", "images", "delete", gcloud_image, "--quiet"],
-                          shell=False,
-                          text=True,
-                          check=True,
-                          capture_output=True,
-                      )
-                      print(f"removed {gcloud_image}")
-
-
-              if __name__ == "__main__":
-                  main()
-              EOF
-
-
-              python3 "$ROOT_DIRECTORY/cleanup_docker_images.py" \
-                  --artifact_registry_repository "${!ORB_GOOGLE_REGION}-docker.pkg.dev/${!ORB_GOOGLE_PROJECT_ID}/${ARTIFACT_REPOSITORY}" \
-                  --artifact_registry_package "${!ORB_GOOGLE_REGION}-docker.pkg.dev/${!ORB_GOOGLE_PROJECT_ID}/${ARTIFACT_REPOSITORY}/${IMAGE_NAME}"
-            environment:
-              ARTIFACT_REPOSITORY: << parameters.artifact_repository >>
-              IMAGE_NAME: << parameters.image_name >>
-              ORB_GOOGLE_PROJECT_ID: << parameters.google_project_id >>
-              ORB_GOOGLE_REGION: << parameters.google_region >>
-              ROOT_DIRECTORY: << parameters.root_directory >>
-            name: Remove Previous Image(s) from Artifact Registry
+        - attach_workspace:
+            at: << parameters.workspace_directory >>
+  - gcp_auth_oidc:
+      gcp_cred_config_file_path: << parameters.gcp_cred_config_file_path >>
+      gcp_sdk_version: << parameters.gcp_sdk_version >>
+      google_project_id: << parameters.google_project_id >>
+      google_project_number: << parameters.google_project_number >>
+      service_account_email: << parameters.service_account_email >>
+      workload_identity_pool_id: << parameters.workload_identity_pool_id >>
+      workload_identity_pool_provider_id: << parameters.workload_identity_pool_provider_id >>
+  - build_docker_image_cloudbuild:
+      artifact_repository: << parameters.artifact_repository >>
+      build_timeout: << parameters.build_timeout >>
+      cloudbuild_yaml_filename: << parameters.cloudbuild_yaml_filename >>
+      context_dir: << parameters.context_dir >>
+      image_name: << parameters.image_name >>
+      path_to_cloudbuild_yaml: << parameters.path_to_cloudbuild_yaml >>
+      remove_untagged: << parameters.remove_untagged >>
+      root_directory: << parameters.checkout_directory >>
+      substitutions: << parameters.substitutions >>
+      use_kaniko: << parameters.use_kaniko >>
+  - slack_notification_build_fail
+working_directory: << parameters.checkout_directory >>

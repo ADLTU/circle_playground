@@ -1,52 +1,109 @@
-version: 2.1
+#version: 2.1
+#
+#orbs:
+#  python: circleci/python@1.5.0
+#
+#jobs:
+#  build-and-test:
+#    docker:
+#      - image: cimg/python:3.11.5
+#    steps:
+#      - checkout
+#      - python/install-packages:
+#          pkg-manager: poetry
+#      - run:
+#          name: Run tests
+#          command: poetry run pytest
+#
+#  rebuild-decoder-container:
+#    docker:
+#      - image: google/cloud-sdk:<< parameters.gcp_sdk_version >>
+#    parameters:
+#      google_region:
+#        default: europe-west2
+#        description: The name of the environment variable containing the region in GCP.
+#        type: string
+#      gcp_sdk_version:
+#        default: 437.0.0
+#        description: The version to use for the GCP SDK.
+#        type: string
+#    steps:
+#      - checkout
+#      - run:
+#          name: Print Parameters
+#          command: |
+#            echo Authenticating Docker with Artifact Registry for << parameters.google_region >>-docker.pkg.dev
+#            echo GCP SDK Version: << parameters.gcp_sdk_version >>
+#
+#      - run:
+#          name: Authenticate Docker with Artifact Registry
+#          command: gcloud auth configure-docker << parameters.google_region >>-docker.pkg.dev
+#
+#      - run:
+#          name: Submit new build
+#          command: gcloud builds submit --project=kraken-v2-dev --config /root/project/cloudbuild_valuator.yaml --substitutions="_PROJECT=kraken-v2-dev"
+#
+#workflows:
+#  sample:
+#    jobs:
+#      - build-and-test
+#      - rebuild-decoder-container:
+#          requires:
+#            - build-and-test
+
 
 orbs:
-  python: circleci/python@1.5.0
+  terraform: circleci/terraform@3.2.0
+  gcp-cli: circleci/gcp-cli@3.1.0
+  build-tools: circleci/build-tools@3.0.0  # optional - needed if CURL isn't in the executor you are using
 
-jobs:
-  build-and-test:
-    docker:
-      - image: cimg/python:3.11.5
+deploy-terraform-main:
+  working_directory: ~/kraken/terraform
+  resource_class: small
+  executor:
+    name: gcp-cli/default
+  steps:
+    - checkout:
+        path: ~/kraken
+    # - build-tools/install-ci-tools  # optional - if CURL isn't installed uncomment this line
+    - gcp-cli/setup:
+        use_oidc: true
+        google_project_id: GCP_PROJECT_ID
+        google_project_number: GCP_PROJECT_NUMBER
+        service_account_email: GCP_SERVICE_ACCOUNT_EMAIL
+        workload_identity_pool_id: GCP_WIP_ID
+        workload_identity_pool_provider_id: GCP_WIP_PROVIDER_ID
+        gcp_cred_config_file_path: "/home/circleci/kraken/.circleci/gcp_cred_config.json"
+    - terraform/install:
+        terraform_version: "1.3.7"
+    - deploy-terraform
+
+
+  deploy-terraform-main:
+    working_directory: ~/kraken/terraform
+    resource_class: small
+    executor:
+      name: gcp-cli/default
     steps:
-      - checkout
-      - python/install-packages:
-          pkg-manager: poetry
-      - run:
-          name: Run tests
-          command: poetry run pytest
+      - checkout:
+          path: ~/kraken
+      # - build-tools/install-ci-tools  # optional - if CURL isn't installed uncomment this line
+      - gcp-cli/setup:
+          use_oidc: true
+          google_project_id: GCP_PROJECT_ID
+          google_project_number: GCP_PROJECT_NUMBER
+          service_account_email: GCP_SERVICE_ACCOUNT_EMAIL
+          workload_identity_pool_id: GCP_WIP_ID
+          workload_identity_pool_provider_id: GCP_WIP_PROVIDER_ID
+          gcp_cred_config_file_path: "/home/circleci/kraken/.circleci/gcp_cred_config.json"
+      - terraform/install:
+          terraform_version: "1.3.7"
+      - deploy-terraform
 
-  rebuild-decoder-container:
-    docker:
-      - image: google/cloud-sdk:<< parameters.gcp_sdk_version >>
-    parameters:
-      google_region:
-        default: europe-west2
-        description: The name of the environment variable containing the region in GCP.
-        type: string
-      gcp_sdk_version:
-        default: 437.0.0
-        description: The version to use for the GCP SDK.
-        type: string
-    steps:
-      - checkout
-      - run:
-          name: Print Parameters
-          command: |
-            echo Authenticating Docker with Artifact Registry for << parameters.google_region >>-docker.pkg.dev            
-            echo GCP SDK Version: << parameters.gcp_sdk_version >>
-
-      - run:
-          name: Authenticate Docker with Artifact Registry
-          command: gcloud auth configure-docker << parameters.google_region >>-docker.pkg.dev
-
-      - run:
-          name: Submit new build
-          command: gcloud builds submit --project=kraken-v2-dev --config /root/project/cloudbuild_valuator.yaml --substitutions="_PROJECT=kraken-v2-dev"
 
 workflows:
-  sample:
+  build:
     jobs:
-      - build-and-test
-      - rebuild-decoder-container:
-          requires:
-            - build-and-test
+      - deploy-terraform-main:
+          context:
+            - data-applications-docs
