@@ -62,14 +62,10 @@ orbs:
 
 jobs:
   deploy-terraform-main:
-#    working_directory: ~/kraken/terraform
-#    resource_class: small
     executor:
       name: gcp-cli/default
     steps:
-      - checkout:
-          path: ~/kraken
-      # - build-tools/install-ci-tools  # optional - if CURL isn't installed uncomment this line
+      - checkout
       - gcp-cli/setup:
           use_oidc: true
           google_project_id: GCP_PROJECT_ID
