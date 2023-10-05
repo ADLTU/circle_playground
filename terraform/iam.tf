@@ -17,8 +17,8 @@ resource "google_iam_workload_identity_pool_provider" "circleci" {
     "attribute.project" = "assertion['oidc.circleci.com/project-id']"
   }
   oidc {
-    allowed_audiences = ["b4b9d1c6-dfa4-4fdf-bc21-273e0a5bb878"]
-    issuer_uri        = "https://oidc.circleci.com/org/b4b9d1c6-dfa4-4fdf-bc21-273e0a5bb878"
+    allowed_audiences = ["12353b33-4bfb-483c-9b63-bc9489b90098"]
+    issuer_uri        = "https://oidc.circleci.com/org/12353b33-4bfb-483c-9b63-bc9489b90098"
   }
 }
 
