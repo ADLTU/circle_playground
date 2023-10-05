@@ -30,4 +30,9 @@ workflows:
   sample:
     jobs:
       - build-and-test
-      - build-and-test2
+
+  sample2:
+    jobs:
+      - build-and-test2:
+          requires:
+            - build-and-test
