@@ -120,7 +120,6 @@ jobs:
       - rebuild-decoder-container
 
 workflows:
-  version: 2
-  my-workflow:
+  build:
     jobs:
       - go-for-it
