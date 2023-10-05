@@ -118,6 +118,11 @@ jobs:
           name: Check Active Account
           command: gcloud auth list
 
+    rebuild-decoder-container:
+      steps:
+        - run:
+            name: Check Active Account
+            command: gcloud auth list
 
 workflows:
   build:
