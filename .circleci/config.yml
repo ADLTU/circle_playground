@@ -44,7 +44,7 @@ jobs:
           command: |
             ls 
             pwd
-            cd /root/circle_playground
+            cd ..
             pwd
             ls -a
 
