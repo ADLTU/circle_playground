@@ -37,14 +37,11 @@ jobs:
 
       - run:
           name: Authenticate Docker with Artifact Registry
-          command: gcloud auth configure-docker "$parameters.google_region-docker.pkg.dev"
+          command: gcloud auth configure-docker << parameters.google_region >>-docker.pkg.dev
 
       - run:
           name: Submit new build
           command: gcloud builds submit --project=kraken-v2-dev --config /root/project/cloudbuild_valuator.yaml --substitutions="_PROJECT=kraken-v2-dev"
-#          command: |
-#            pwd
-#            ls -a
 
 workflows:
   sample:
